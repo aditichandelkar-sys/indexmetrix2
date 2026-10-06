@@ -53,12 +53,24 @@ try {
     console.error('[Worker] Redis connection error:', err.message);
   });
 
+  const createJiti = require('jiti');
+  const jiti = createJiti(process.cwd());
+  const { processBatchIndexingJob, executeJobHandler } = jiti('./src/lib/queue.ts');
+
   const worker = new Worker(
     'index-matrix-jobs',
     async (job) => {
       console.log(`[Worker] Processing Job ID ${job.id} (Op: ${job.name})`);
-      // Dynamic import/execution
-      return { success: true, processedAt: new Date().toISOString() };
+      if (job.name === 'BATCH_INDEXING' || job.data?.batchJobId) {
+        const batchJobId = job.data.batchJobId || job.data.jobId;
+        console.log(`[Worker] Executing real batch indexing job: ${batchJobId}`);
+        await processBatchIndexingJob(batchJobId);
+        return { success: true, batchJobId, processedAt: new Date().toISOString() };
+      }
+
+      console.log(`[Worker] Executing real job handler for: ${job.data?.targetUrl || job.id}`);
+      await executeJobHandler(job.data);
+      return { success: true, jobId: job.id, processedAt: new Date().toISOString() };
     },
     { connection, concurrency: 10 }
   );

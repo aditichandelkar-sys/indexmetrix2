@@ -407,11 +407,33 @@ export async function createBatchIndexingJob(params: CreateBatchJobParams): Prom
     return job;
   });
 
-  // Enqueue for processing
-  inProcessBatchQueue.push(batchJob.id);
-  setTimeout(() => {
-    processInProcessBatchQueue();
-  }, 20);
+  // Enqueue for processing: Use Redis/BullMQ when available while preserving in-process fallback
+  if (!useInMemoryFallback && redisConnection) {
+    try {
+      if (!sharedQueue) {
+        sharedQueue = new Queue('index-matrix-jobs', { connection: redisConnection });
+      }
+      await sharedQueue.add('BATCH_INDEXING', { batchJobId: batchJob.id }, {
+        jobId: `batch_${batchJob.id}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: 100,
+        removeOnFail: 500,
+      });
+      console.log(`[Queue] Enqueued batch job ${batchJob.id} to BullMQ queue`);
+    } catch (err) {
+      console.warn('[Queue] BullMQ enqueue failed; falling back to in-process queue:', err);
+      inProcessBatchQueue.push(batchJob.id);
+      setTimeout(() => {
+        processInProcessBatchQueue();
+      }, 20);
+    }
+  } else {
+    inProcessBatchQueue.push(batchJob.id);
+    setTimeout(() => {
+      processInProcessBatchQueue();
+    }, 20);
+  }
 
   const fullJob = await prisma.indexingJob.findUnique({
     where: { id: batchJob.id },

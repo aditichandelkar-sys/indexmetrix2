@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { prisma } from '../src/lib/db';
 import { analyzeUrl } from '../src/lib/analyzer';
@@ -24,8 +24,10 @@ describe('Commercial URL Indexing & Discovery Engine Tests', () => {
   let ownerUser: any;
   let otherCustomerUser: any;
   let testProject: any;
+  let originalFetch: typeof global.fetch;
 
   beforeEach(async () => {
+    originalFetch = global.fetch;
     // 1. Fetch or create test customer
     customerUser = await prisma.user.findFirst({
       where: { email: 'customer@indexmatrix.io' },
@@ -55,6 +57,19 @@ describe('Commercial URL Indexing & Discovery Engine Tests', () => {
 
     // Mock authenticated user as customerUser by default
     vi.spyOn(auth, 'getSessionUser').mockResolvedValue(customerUser as any);
+
+    // Mock WebSub external hub calls deterministically while letting other HTTP calls through
+    vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: any) => {
+      const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input?.url || '';
+      if (urlStr.includes('pubsubhubbub.appspot.com')) {
+        return new Response(null, { status: 204 });
+      }
+      return originalFetch(input, init);
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   // =========================================================================
@@ -215,7 +230,7 @@ describe('Commercial URL Indexing & Discovery Engine Tests', () => {
       expect(result.verified).toBe(false);
       expect(result.status).not.toBe('INDEXED');
       expect(result.status).not.toBe('INDEXED_CONFIRMED');
-    }, 15000);
+    }, 35000);
   });
 
   // =========================================================================

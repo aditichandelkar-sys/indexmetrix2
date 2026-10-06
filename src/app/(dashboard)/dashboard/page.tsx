@@ -13,6 +13,7 @@ import {
   Activity,
   Layers,
   ShieldCheck,
+  ShieldAlert,
   ArrowRight,
   ExternalLink,
   RefreshCw,
@@ -25,17 +26,16 @@ import {
 export default function DashboardOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState({
+    totalProjects: 0,
     totalUrls: 0,
     indexedUrls: 0,
     notIndexed: 0,
-    pendingUrls: 0,
-    processingUrls: 0,
-    blockedUrls: 0,
-    errorUrls: 0,
-    remainingCredits: '...',
-    googleConnections: 0,
+    pendingInspections: 0,
     activeJobs: 0,
     completedJobs: 0,
+    failedJobs: 0,
+    remainingCredits: '...',
+    googleConnections: 0,
   });
   const [recentUrls, setRecentUrls] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
@@ -49,7 +49,7 @@ export default function DashboardOverviewPage() {
         fetch('/api/credits/balance'),
         fetch('/api/projects'),
         fetch('/api/google/properties'),
-        fetch('/api/jobs?limit=5'),
+        fetch('/api/jobs?limit=10'),
       ]);
 
       const urlsData = await urlsRes.json();
@@ -64,39 +64,38 @@ export default function DashboardOverviewPage() {
 
       const indexed = stats.INDEXED || 0;
       const notIndexed = stats.NOT_INDEXED || 0;
-      const pending = (stats.DISCOVERY_PENDING || 0) + (stats.UNINSPECTED || 0) + (stats.IMPORTED || 0) + (stats.ANALYZED || 0);
-      const processing = stats.PROCESSING || 0;
-      const blocked = stats.BLOCKED || 0;
-      const errors = stats.ERROR || 0;
+      const pendingInspections = (stats.INSPECTION_PENDING || 0) + (stats.DISCOVERY_PENDING || 0) + (stats.IMPORTED || 0) + (stats.ANALYZED || 0);
 
       let connCount = 0;
       if (googleData.success && googleData.accounts) {
         connCount = googleData.accounts.length;
       }
 
+      let failedJobsCount = 0;
       let activeJobsCount = 0;
       let completedJobsCount = 0;
       const jobsList = jobsData.jobs || [];
       for (const j of jobsList) {
-        if (j.status === 'QUEUED' || j.status === 'PROCESSING') {
-          activeJobsCount++;
-        } else if (j.status === 'COMPLETED' || j.status === 'PARTIAL') {
+        if (j.status === 'FAILED') {
+          failedJobsCount++;
+        } else if (j.status === 'COMPLETED') {
           completedJobsCount++;
+        } else if (j.status === 'PROCESSING' || j.status === 'QUEUED') {
+          activeJobsCount++;
         }
       }
 
       setMetrics({
+        totalProjects: projData.projects?.length || 0,
         totalUrls: total,
         indexedUrls: indexed,
         notIndexed,
-        pendingUrls: pending,
-        processingUrls: processing,
-        blockedUrls: blocked,
-        errorUrls: errors,
-        remainingCredits: credData.creditMode === 'UNLIMITED' ? 'UNLIMITED' : credData.balance?.toLocaleString() || '0',
-        googleConnections: connCount,
+        pendingInspections,
         activeJobs: activeJobsCount,
         completedJobs: completedJobsCount,
+        failedJobs: failedJobsCount,
+        remainingCredits: credData.creditMode === 'UNLIMITED' ? 'UNLIMITED' : credData.balance?.toLocaleString() || '0',
+        googleConnections: connCount,
       });
 
       setRecentUrls(urls);
@@ -114,13 +113,13 @@ export default function DashboardOverviewPage() {
   }, []);
 
   const cards = [
-    { title: 'Total URLs', value: metrics.totalUrls, icon: Globe, color: 'text-brand-400' },
+    { title: 'Total Projects', value: metrics.totalProjects, icon: Layers, color: 'text-brand-400' },
+    { title: 'Total URLs', value: metrics.totalUrls, icon: Globe, color: 'text-cyan-400' },
     { title: 'Indexed (GSC)', value: metrics.indexedUrls, icon: CheckCircle2, color: 'text-emerald-400' },
     { title: 'Not Indexed', value: metrics.notIndexed, icon: AlertTriangle, color: 'text-amber-400' },
-    { title: 'Discovery Pending', value: metrics.pendingUrls, icon: Clock, color: 'text-cyan-400' },
-    { title: 'Blocked', value: metrics.blockedUrls, icon: ShieldCheck, color: 'text-rose-400' },
-    { title: 'Active Jobs', value: metrics.activeJobs, icon: Activity, color: 'text-purple-400' },
-    { title: 'Remaining Credits', value: metrics.remainingCredits, icon: Coins, color: 'text-amber-300' },
+    { title: 'Pending Inspections', value: metrics.pendingInspections, icon: Clock, color: 'text-blue-400' },
+    { title: 'Failed Jobs', value: metrics.failedJobs, icon: ShieldAlert, color: 'text-rose-400' },
+    { title: 'Credit Balance', value: metrics.remainingCredits, icon: Coins, color: 'text-amber-300' },
     { title: 'GSC Accounts', value: metrics.googleConnections, icon: Search, color: 'text-cyan-300' },
   ];
 

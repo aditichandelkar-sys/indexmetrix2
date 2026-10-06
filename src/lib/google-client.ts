@@ -415,3 +415,24 @@ export async function inspectUrlWithGoogle(
     raw: data,
   };
 }
+
+/**
+ * Normalizes Google coverage verdict into strict UrlStatus.
+ * CRITICAL POLICY: "Crawled - currently not indexed" is NEVER marked INDEXED.
+ */
+export function normalizeGoogleVerdictToStatus(verdict?: string, coverageState?: string): 'INDEXED' | 'NOT_INDEXED' {
+  const v = (verdict || '').toUpperCase();
+  const c = (coverageState || '').toLowerCase();
+
+  // If coverage explicitly says "not indexed", it is strictly NOT_INDEXED
+  if (c.includes('not indexed') || c.includes('excluded') || c.includes('blocked') || c.includes('error')) {
+    return 'NOT_INDEXED';
+  }
+
+  // Only mark INDEXED if verdict is PASS or coverage explicitly says "submitted and indexed" / "indexed, not in sitemap"
+  if (v === 'PASS' || c.includes('submitted and indexed') || c.includes('indexed, not in sitemap') || (c.includes('indexed') && !c.includes('not indexed'))) {
+    return 'INDEXED';
+  }
+
+  return 'NOT_INDEXED';
+}

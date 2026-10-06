@@ -13,27 +13,36 @@ describe('A. URL Pipeline & Target URL Support (Section D)', () => {
     ]); // %PDF-1.4
 
     const originalFetch = global.fetch;
-    global.fetch = vi.fn().mockResolvedValueOnce({
-      status: 200,
-      ok: true,
-      headers: new Headers({
-        'content-type': 'application/pdf',
-        'content-length': '84974',
-      }),
-      body: {
-        getReader: () => {
-          let read = false;
-          return {
-            read: async () => {
-              if (!read) {
-                read = true;
-                return { done: false, value: mockPdfBuffer };
-              }
-              return { done: true, value: undefined };
-            },
-          };
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('robots.txt')) {
+        return Promise.resolve({
+          status: 404,
+          ok: false,
+          text: async () => '',
+        });
+      }
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        headers: new Headers({
+          'content-type': 'application/pdf',
+          'content-length': '84974',
+        }),
+        body: {
+          getReader: () => {
+            let read = false;
+            return {
+              read: async () => {
+                if (!read) {
+                  read = true;
+                  return { done: false, value: mockPdfBuffer };
+                }
+                return { done: true, value: undefined };
+              },
+            };
+          },
         },
-      },
+      });
     });
 
     try {

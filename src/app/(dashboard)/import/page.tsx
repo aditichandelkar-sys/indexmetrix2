@@ -13,7 +13,7 @@ function BulkImportContent() {
   const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState(initialProjectId);
   const [rawContent, setRawContent] = useState('');
-  const [sourceType, setSourceType] = useState<'RAW_TEXT' | 'CSV'>('RAW_TEXT');
+  const [sourceType, setSourceType] = useState<'RAW_TEXT' | 'CSV_FILE'>('RAW_TEXT');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,8 +39,8 @@ function BulkImportContent() {
     reader.onload = (event) => {
       const content = event.target?.result as string;
       setRawContent(content);
-      if (file.name.endsWith('.csv')) {
-        setSourceType('CSV');
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        setSourceType('CSV_FILE');
       } else {
         setSourceType('RAW_TEXT');
       }
@@ -64,12 +64,12 @@ function BulkImportContent() {
     setResult(null);
 
     try {
-      const res = await fetch('/api/urls/bulk', {
+      const res = await fetch('/api/urls/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId,
-          rawContent,
+          content: rawContent,
           sourceType,
         }),
       });
@@ -78,7 +78,13 @@ function BulkImportContent() {
       if (!res.ok || !data.success) {
         setError(data.error || 'Failed to import URLs');
       } else {
-        setResult(data);
+        setResult({
+          totalProcessed: data.totalExtracted || 0,
+          importedCount: data.accepted || 0,
+          invalidCount: (data.invalid || 0) + (data.blocked || 0) + (data.duplicates || 0),
+          duplicates: data.duplicates || 0,
+          blocked: data.blocked || 0,
+        });
         setRawContent('');
       }
     } catch {
