@@ -126,6 +126,19 @@ async function main() {
     },
   });
 
+  const DEMO_3RD_PARTY_PROJECT_UUID = '8f3b2a1c-9d4e-4f5a-b6c7-2e1d0f9a8b7c';
+  await prisma.project.upsert({
+    where: { id: DEMO_3RD_PARTY_PROJECT_UUID },
+    update: {},
+    create: {
+      id: DEMO_3RD_PARTY_PROJECT_UUID,
+      userId: customer.id,
+      name: '3rd-Party & External Links',
+      domain: 'third-party-links.io',
+      description: 'Automated workspace for 3rd-party URLs, backlinks, forums, and external content indexing.',
+    },
+  });
+
   // 4. Create Initial URLs
   const sampleUrls = [
     {

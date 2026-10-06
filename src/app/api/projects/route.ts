@@ -28,6 +28,28 @@ export async function GET() {
       orderBy: { createdAt: 'desc' },
     });
 
+    // Ensure default 3rd-party & external workspace is available
+    const hasThirdPartyProject = projects.some(
+      (p) => p.domain === 'third-party-links.io' || p.name === '3rd-Party & External Links'
+    );
+
+    if (!hasThirdPartyProject) {
+      const defaultThirdParty = await prisma.project.create({
+        data: {
+          userId: user.id,
+          name: '3rd-Party & External Links',
+          domain: 'third-party-links.io',
+          description: 'Automated workspace for 3rd-party URLs, backlinks, forums, and external content indexing.',
+        },
+        include: {
+          _count: {
+            select: { urls: true, sitemaps: true, properties: true, indexingJobs: true },
+          },
+        },
+      });
+      projects.push(defaultThirdParty as any);
+    }
+
     return NextResponse.json({ success: true, projects });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

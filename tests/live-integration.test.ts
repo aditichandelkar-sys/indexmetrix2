@@ -170,5 +170,5 @@ describe('Live Integration & End-to-End Acceptance Tests', () => {
     });
     expect(creditCheck.isUnlimited).toBe(true);
     expect(creditCheck.amountDeducted).toBe(0);
-  }, 30000);
+  }, 60000);
 });

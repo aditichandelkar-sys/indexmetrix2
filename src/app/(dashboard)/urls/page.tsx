@@ -143,7 +143,16 @@ function UrlsManagerContent() {
     loadUrls();
   };
 
-  // Direct URL Inspection handler
+  const currentProject = projects.find((p) => p.id === inputProjectId);
+  const isThirdPartyProject = Boolean(
+    currentProject &&
+    (currentProject.domain === 'third-party-links.io' ||
+     currentProject.name?.toLowerCase().includes('3rd-party') ||
+     currentProject.name?.toLowerCase().includes('third-party') ||
+     currentProject.name?.toLowerCase().includes('external'))
+  );
+
+  // Direct URL Inspection handler (only for owned Search Console properties)
   const handleDirectInspect = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputUrl.trim()) return;
@@ -152,6 +161,14 @@ function UrlsManagerContent() {
       setActionMessage({
         type: 'error',
         text: 'Please select a project before adding URLs.',
+      });
+      return;
+    }
+
+    if (isThirdPartyProject) {
+      setActionMessage({
+        type: 'error',
+        text: 'Google Search Console URL Inspection is unavailable for third-party URLs because they are not owned properties. Please click "Submit for Indexing" to run the discovery workflow.',
       });
       return;
     }
@@ -199,7 +216,7 @@ function UrlsManagerContent() {
     }
   };
 
-  // Submit for Indexing & Discovery handler (supports any third-party or owned public URL)
+  // Submit for Indexing & Discovery handler (branches based on project type)
   const handleSubmitForIndexing = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputUrl.trim()) return;
@@ -216,8 +233,7 @@ function UrlsManagerContent() {
     setActionMessage(null);
 
     try {
-      // 1. Add URL record
-      const addRes = await fetch('/api/urls', {
+      const res = await fetch('/api/urls/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -226,42 +242,27 @@ function UrlsManagerContent() {
         }),
       });
 
-      const addData = await addRes.json();
-      if (!addRes.ok || !addData.success) {
+      const data = await res.json();
+      if (!res.ok || !data.success) {
         setActionMessage({
           type: 'error',
-          text: addData.error?.message || addData.error || 'Failed to submit URL',
+          text: data.error?.message || data.error || 'Failed to submit URL',
         });
         return;
       }
 
-      const createdUrl = addData.url;
-
-      // 2. Automatically dispatch background discovery job
-      const jobRes = await fetch('/api/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: inputProjectId,
-          urlIds: [createdUrl.id],
-          type: 'DISCOVERY_AND_INSPECTION',
-          idempotencyKey: `submit_${createdUrl.id}_${Date.now()}`,
-        }),
-      });
-
-      const jobData = await jobRes.json();
-      if (!jobRes.ok || !jobData.success) {
+      if (data.submissionType === 'THIRD_PARTY_DISCOVERY') {
         setActionMessage({
-          type: 'error',
-          text: `URL saved, but discovery job initialization failed: ${jobData.error}`,
+          type: 'success',
+          text: `Submitted for Discovery! Automated technical audit and discovery signals job enqueued in Jobs Center (#${data.job?.id?.slice(0, 8)}).`,
         });
       } else {
         setActionMessage({
           type: 'success',
-          text: `Submitted for Discovery! Technical audit and discovery signals initiated.`,
+          text: `Submitted for Indexing! Search Console inspection and discovery job enqueued in Jobs Center (#${data.job?.id?.slice(0, 8)}).`,
         });
-        loadUrls();
       }
+      loadUrls();
     } catch (err: any) {
       setActionMessage({ type: 'error', text: err.message || 'Submission network error' });
     } finally {
@@ -565,13 +566,27 @@ function UrlsManagerContent() {
                 <button
                   type="button"
                   onClick={handleDirectInspect}
-                  disabled={isDirectInspecting || !inputUrl.trim()}
-                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-cyan-500/30 text-cyan-300 text-xs font-medium transition-colors disabled:opacity-50"
-                  title="Official Google URL Inspection for authorized Search Console properties"
+                  disabled={isDirectInspecting || !inputUrl.trim() || isThirdPartyProject}
+                  className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl border text-xs font-medium transition-colors ${
+                    isThirdPartyProject
+                      ? 'bg-slate-800/40 border-white/5 text-slate-500 cursor-not-allowed opacity-40'
+                      : 'bg-slate-800 hover:bg-slate-700 border-cyan-500/30 text-cyan-300 disabled:opacity-50'
+                  }`}
+                  title={
+                    isThirdPartyProject
+                      ? 'GSC URL Inspection is only available for verified owned properties, not 3rd-party URLs. Use "Submit for Indexing" for discovery.'
+                      : 'Official Google URL Inspection for authorized Search Console properties'
+                  }
                 >
                   <Search className={`w-3.5 h-3.5 ${isDirectInspecting ? 'animate-spin' : ''}`} />
                   <span>{isDirectInspecting ? 'Inspecting...' : 'GSC Inspect'}</span>
                 </button>
+
+                {isThirdPartyProject && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-mono text-[10px]">
+                    3rd-Party Discovery Mode
+                  </span>
+                )}
               </div>
             </div>
 
@@ -927,10 +942,23 @@ function UrlsManagerContent() {
                         </td>
                         <td className="px-5 py-3.5 text-right space-x-1">
                           <button
-                            onClick={() => handleReinspect(u.id)}
-                            disabled={isRowLoading}
-                            title="Inspect Now with Google Search Console"
-                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-cyan-400 hover:text-cyan-300 disabled:opacity-50"
+                            onClick={() => {
+                              if (!u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party'))) {
+                                setActionMessage({
+                                  type: 'error',
+                                  text: 'GSC URL Inspection requires verified Search Console ownership. For 3rd-party URLs, please click the Lightning button to run Technical Discovery.',
+                                });
+                                return;
+                              }
+                              handleReinspect(u.id);
+                            }}
+                            disabled={isRowLoading || (!u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party')))}
+                            title={!u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party')) ? 'GSC Inspection unavailable for 3rd-party URL (unowned property)' : 'Inspect Now with Google Search Console'}
+                            className={`p-1.5 rounded-lg bg-white/5 hover:bg-white/10 ${
+                              !u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party'))
+                                ? 'text-slate-600 cursor-not-allowed opacity-40'
+                                : 'text-cyan-400 hover:text-cyan-300'
+                            } disabled:opacity-30`}
                           >
                             <RefreshCw className={`w-3.5 h-3.5 ${isRowLoading ? 'animate-spin' : ''}`} />
                           </button>

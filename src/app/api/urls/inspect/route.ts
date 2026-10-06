@@ -6,6 +6,7 @@ import { validateUrlForSSRF } from '@/lib/ssrf';
 import { normalizeUrl, findBestMatchingProperty } from '@/lib/property-matcher';
 import { deductCredits, addCredits, CREDIT_COSTS } from '@/lib/credit-ledger';
 import { inspectUrlWithGoogle, sanitizeGoogleError } from '@/lib/google-client';
+import { isThirdPartyProject } from '@/lib/project-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -84,7 +85,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Tenant Isolation & Property Matching
+    // 3. Verify Project belongs to user (or OWNER)
+    const project = await prisma.project.findFirst({
+      where: {
+        id: projectId,
+        ...(user.role === 'OWNER' ? {} : { userId: user.id }),
+      },
+      include: {
+        properties: true,
+      },
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'PROJECT_NOT_FOUND',
+            message: 'Project not found or you do not have permission to access it.',
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    // Third-party projects cannot use Google Search Console URL inspection
+    if (isThirdPartyProject(project)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'PROPERTY_NOT_AUTHORIZED',
+            message: 'The submitted URL is in a third-party project and cannot be inspected via Google Search Console. Google URL Inspection is only available for verified owned properties, not 3rd-party URLs. Use "Submit for Indexing" for third-party discovery.',
+          },
+        },
+        { status: 400 }
+      );
+    }
+
+    // 4. Tenant Isolation & Property Matching
     // Retrieve verified properties belonging exclusively to the current user's connected Google accounts
     const userProperties = await prisma.searchConsoleProperty.findMany({
       where: {
@@ -130,28 +169,6 @@ export async function POST(req: NextRequest) {
 
     const matchedProperty = userProperties.find((p) => p.id === match.property!.id)!;
     const googleAccount = matchedProperty.googleAccount;
-
-    // 4. Verify Project belongs to user (or OWNER)
-    const project = await prisma.project.findFirst({
-      where: {
-        id: projectId,
-        ...(user.role === 'OWNER' ? {} : { userId: user.id }),
-      },
-    });
-
-    if (!project) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: 'PROJECT_NOT_FOUND',
-            message: 'Project not found or you do not have permission to access it.',
-          },
-        },
-        { status: 404 }
-      );
-    }
-
     const targetProjectId = project.id;
 
     // 5. Upsert URL record
