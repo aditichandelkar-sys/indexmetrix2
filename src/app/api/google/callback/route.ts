@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { decodeJwt } from 'jose';
 import { prisma } from '@/lib/db';
-import { exchangeCodeForTokens, listSearchConsoleProperties, GOOGLE_OAUTH_SCOPES } from '@/lib/google-client';
+import { exchangeCodeForTokens, listSearchConsoleProperties, GOOGLE_OAUTH_SCOPES, getOAuthCallbackRedirectUrl } from '@/lib/google-client';
 import { encryptText } from '@/lib/crypto';
 import { createSessionToken, SESSION_COOKIE_NAME } from '@/lib/auth';
 
@@ -15,16 +15,16 @@ export async function GET(req: NextRequest) {
     const error = searchParams.get('error');
 
     if (error) {
-      return NextResponse.redirect(new URL(`/google?error=${encodeURIComponent(error)}`, req.url));
+      return NextResponse.redirect(getOAuthCallbackRedirectUrl(`/google?error=${encodeURIComponent(error)}`, req));
     }
 
     if (!code || !state) {
-      return NextResponse.redirect(new URL('/google?error=missing_code_or_state', req.url));
+      return NextResponse.redirect(getOAuthCallbackRedirectUrl('/google?error=missing_code_or_state', req));
     }
 
     const userId = state.split(':')[0];
     if (!userId) {
-      return NextResponse.redirect(new URL('/google?error=invalid_state', req.url));
+      return NextResponse.redirect(getOAuthCallbackRedirectUrl('/google?error=invalid_state', req));
     }
 
     // Verify user exists in database
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
       where: { id: userId },
     });
     if (!user) {
-      return NextResponse.redirect(new URL('/google?error=user_not_found', req.url));
+      return NextResponse.redirect(getOAuthCallbackRedirectUrl('/google?error=user_not_found', req));
     }
 
     const tokens = await exchangeCodeForTokens(code);
@@ -141,7 +141,7 @@ export async function GET(req: NextRequest) {
       status: user.status as any,
     });
 
-    const response = NextResponse.redirect(new URL('/google?success=connected', req.url));
+    const response = NextResponse.redirect(getOAuthCallbackRedirectUrl('/google?success=connected', req));
     response.cookies.set({
       name: SESSION_COOKIE_NAME,
       value: sessionToken,
@@ -163,7 +163,7 @@ export async function GET(req: NextRequest) {
     console.error('Google OAuth callback error:', sanitized);
 
     return NextResponse.redirect(
-      new URL(`/google?error=${encodeURIComponent(sanitized)}`, req.url)
+      getOAuthCallbackRedirectUrl(`/google?error=${encodeURIComponent(sanitized)}`, req)
     );
   }
 }

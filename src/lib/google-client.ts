@@ -135,6 +135,66 @@ export function getGoogleRedirectUri(): string {
 }
 
 /**
+ * Resolves the destination URL for browser redirects following OAuth completion or error.
+ * In production: strictly guarantees https://indexmetrix.com (or valid public HTTPS APP_BASE_URL).
+ * Under no circumstances does it redirect users to internal container reverse-proxy addresses (e.g. localhost:8080).
+ */
+export function getOAuthCallbackRedirectUrl(
+  pathAndQuery: string,
+  req?: { url?: string; headers?: { get: (name: string) => string | null } }
+): URL {
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction) {
+    const configured = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
+    let base = 'https://indexmetrix.com';
+
+    if (configured) {
+      try {
+        const parsed = new URL(configured);
+        const host = parsed.hostname.toLowerCase();
+        const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local');
+        if (!isLocal && parsed.protocol === 'https:') {
+          base = `${parsed.protocol}//${parsed.host}`;
+        }
+      } catch {
+        base = 'https://indexmetrix.com';
+      }
+    } else if (req?.headers) {
+      const forwardedHost = req.headers.get('x-forwarded-host');
+      const forwardedProto = req.headers.get('x-forwarded-proto') || 'https';
+      if (forwardedHost && !forwardedHost.includes('localhost') && !forwardedHost.includes('127.0.0.1')) {
+        base = `${forwardedProto}://${forwardedHost}`;
+      }
+    }
+
+    return new URL(pathAndQuery, base);
+  }
+
+  // Development & Test environments:
+  const configured = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
+  if (configured) {
+    try {
+      const parsed = new URL(configured);
+      return new URL(pathAndQuery, `${parsed.protocol}//${parsed.host}`);
+    } catch {
+      // ignore
+    }
+  }
+
+  if (req?.url) {
+    try {
+      const parsed = new URL(req.url);
+      return new URL(pathAndQuery, `${parsed.protocol}//${parsed.host}`);
+    } catch {
+      // ignore
+    }
+  }
+
+  return new URL(pathAndQuery, 'http://localhost:3000');
+}
+
+/**
  * Builds the Google OAuth 2.0 authorization URL
  */
 export function buildGoogleAuthUrl(state: string): string {

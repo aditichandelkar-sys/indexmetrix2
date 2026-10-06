@@ -137,10 +137,16 @@ export function validateAppBaseUrl(
  */
 export function getAppBaseUrl(): string {
   const isBuildPhase = process.env.NEXT_PHASE === 'phase-production-build';
+  const isProduction = process.env.NODE_ENV === 'production';
   const rawUrl = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
 
   // During static compilation phase (next build) in local dev, allow a fallback if not configured
   if (isBuildPhase && (!rawUrl || rawUrl.includes('localhost'))) {
+    return 'https://indexmetrix.com';
+  }
+
+  // In production, if no URL was explicitly configured, default safely to canonical domain
+  if (isProduction && !rawUrl) {
     return 'https://indexmetrix.com';
   }
 

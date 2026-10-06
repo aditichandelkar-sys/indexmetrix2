@@ -26,6 +26,36 @@ const PROTECTED_PREFIXES = [
   '/admin',
 ];
 
+function getMiddlewareRedirectUrl(targetPath: string, req: NextRequest): URL {
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction) {
+    const configured = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
+    let base = 'https://indexmetrix.com';
+    if (configured) {
+      try {
+        const parsed = new URL(configured);
+        const host = parsed.hostname.toLowerCase();
+        if (host !== 'localhost' && host !== '127.0.0.1' && !host.endsWith('.local') && parsed.protocol === 'https:') {
+          base = `${parsed.protocol}//${parsed.host}`;
+        }
+      } catch {
+        base = 'https://indexmetrix.com';
+      }
+    } else {
+      const forwardedHost = req.headers.get('x-forwarded-host');
+      const forwardedProto = req.headers.get('x-forwarded-proto') || 'https';
+      if (forwardedHost && !forwardedHost.includes('localhost') && !forwardedHost.includes('127.0.0.1')) {
+        base = `${forwardedProto}://${forwardedHost}`;
+      }
+    }
+    return new URL(targetPath, base);
+  }
+
+  const nextUrl = req.nextUrl.clone();
+  nextUrl.pathname = targetPath;
+  return nextUrl;
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -51,7 +81,7 @@ export async function middleware(req: NextRequest) {
   // If trying to access protected route without valid session -> redirect to login
   if (isProtected) {
     if (!sessionPayload) {
-      const loginUrl = new URL('/login', req.url);
+      const loginUrl = getMiddlewareRedirectUrl('/login', req);
       loginUrl.searchParams.set('from', pathname);
       const res = NextResponse.redirect(loginUrl);
       if (token) {
@@ -63,7 +93,7 @@ export async function middleware(req: NextRequest) {
     // If trying to access admin routes without OWNER role -> redirect to dashboard
     if (pathname === '/admin' || pathname.startsWith('/admin/')) {
       if (sessionPayload.role !== 'OWNER') {
-        return NextResponse.redirect(new URL('/dashboard', req.url));
+        return NextResponse.redirect(getMiddlewareRedirectUrl('/dashboard', req));
       }
     }
 
@@ -72,7 +102,7 @@ export async function middleware(req: NextRequest) {
 
   // If already logged in and visiting login or register -> redirect to dashboard
   if (isAuthPage && sessionPayload) {
-    return NextResponse.redirect(new URL('/dashboard', req.url));
+    return NextResponse.redirect(getMiddlewareRedirectUrl('/dashboard', req));
   }
 
   return NextResponse.next();
