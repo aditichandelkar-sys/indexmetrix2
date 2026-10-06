@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { getAppBaseUrl, getPublicFeedUrl } from '@/lib/app-config';
 
 export async function GET() {
   try {
@@ -26,7 +27,8 @@ export async function GET() {
       )
       .join('\n');
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const appUrl = getAppBaseUrl();
+    const feedSelfUrl = getPublicFeedUrl();
 
     const rssXml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
@@ -34,7 +36,7 @@ export async function GET() {
     <title>INDEX MATRIX Rapid Feed</title>
     <link>${appUrl}</link>
     <description>Realtime indexing and crawl notification stream</description>
-    <atom:link rel="self" href="${appUrl}/api/feeds/rapid-rss.xml" type="application/rss+xml" />
+    <atom:link rel="self" href="${feedSelfUrl}" type="application/rss+xml" />
     <atom:link rel="hub" href="https://pubsubhubbub.appspot.com/" />
 ${rssItems}
   </channel>

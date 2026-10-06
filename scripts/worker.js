@@ -37,7 +37,21 @@ if (!REDIS_URL || REDIS_URL.includes('mock') || REDIS_URL.includes('disabled')) 
 }
 
 try {
-  const connection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
+  const MAX_RECONNECT_ATTEMPTS = 20;
+  const connection = new IORedis(REDIS_URL, {
+    maxRetriesPerRequest: null,
+    retryStrategy: (times) => {
+      if (times > MAX_RECONNECT_ATTEMPTS) {
+        console.warn(`[Worker] Redis reconnect limit reached (${MAX_RECONNECT_ATTEMPTS} attempts); stopping worker.`);
+        return null;
+      }
+      return Math.min(times * 100, 3000);
+    },
+  });
+
+  connection.on('error', (err) => {
+    console.error('[Worker] Redis connection error:', err.message);
+  });
 
   const worker = new Worker(
     'index-matrix-jobs',
@@ -57,7 +71,39 @@ try {
     console.error(`[Worker] Job ${job?.id} failed:`, err.message);
   });
 
+  worker.on('error', (err) => {
+    console.error('[Worker] BullMQ worker error:', err.message);
+  });
+
   console.log('[Worker] Listening for background jobs on queue: index-matrix-jobs');
+
+  // Graceful shutdown handling (SIGTERM & SIGINT)
+  let isShuttingDown = false;
+  async function gracefulShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n[Worker] Received ${signal}. Starting graceful shutdown...`);
+
+    try {
+      console.log('[Worker] Pausing worker and awaiting completion of active jobs...');
+      await worker.close();
+      console.log('[Worker] BullMQ worker closed.');
+
+      if (connection.status !== 'end') {
+        await connection.quit().catch(() => {});
+      }
+      console.log('[Worker] Dedicated Redis connection closed.');
+
+      console.log('[Worker] Graceful shutdown completed cleanly.');
+      process.exit(0);
+    } catch (err) {
+      console.error('[Worker] Error during graceful shutdown:', err.message);
+      process.exit(1);
+    }
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 } catch (e) {
   console.error('[Worker] Failed to start dedicated worker:', e.message);
   process.exit(1);

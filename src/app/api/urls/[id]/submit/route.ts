@@ -67,7 +67,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
 
       const { dispatchFastIndexing } = await import('@/lib/fast-indexer');
-      const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+      const { getAppBaseUrl } = await import('@/lib/app-config');
+      const appBaseUrl = getAppBaseUrl();
       const dispatchSummary = await dispatchFastIndexing(urlRecord.normalizedUrl, { appBaseUrl });
 
       await prisma.url.update({

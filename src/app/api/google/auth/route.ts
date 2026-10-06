@@ -3,6 +3,8 @@ import { getSessionUser } from '@/lib/auth';
 import { buildGoogleAuthUrl } from '@/lib/google-client';
 import { generateRandomToken } from '@/lib/crypto';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const user = await getSessionUser();

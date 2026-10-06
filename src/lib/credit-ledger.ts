@@ -21,6 +21,7 @@ export interface DeductCreditParams {
 export interface CreditResult {
   success: boolean;
   isUnlimited: boolean;
+  unlimited?: boolean;
   balanceBefore: number;
   balanceAfter: number;
   amountDeducted: number;
@@ -45,6 +46,7 @@ export async function deductCredits(params: DeductCreditParams): Promise<CreditR
       return {
         success: true,
         isUnlimited: false,
+        unlimited: false,
         balanceBefore: existingTx.balanceAfter - existingTx.amount,
         balanceAfter: existingTx.balanceAfter,
         amountDeducted: -existingTx.amount,
@@ -63,6 +65,7 @@ export async function deductCredits(params: DeductCreditParams): Promise<CreditR
     return {
       success: false,
       isUnlimited: false,
+      unlimited: false,
       balanceBefore: 0,
       balanceAfter: 0,
       amountDeducted: 0,
@@ -75,6 +78,7 @@ export async function deductCredits(params: DeductCreditParams): Promise<CreditR
     return {
       success: true,
       isUnlimited: true,
+      unlimited: true,
       balanceBefore: 0,
       balanceAfter: 0,
       amountDeducted: 0,
@@ -99,6 +103,7 @@ export async function deductCredits(params: DeductCreditParams): Promise<CreditR
     return {
       success: false,
       isUnlimited: false,
+      unlimited: false,
       balanceBefore: wallet.balance,
       balanceAfter: wallet.balance,
       amountDeducted: 0,
@@ -151,6 +156,7 @@ export async function deductCredits(params: DeductCreditParams): Promise<CreditR
     return {
       success: true,
       isUnlimited: false,
+      unlimited: false,
       balanceBefore: wallet.balance,
       balanceAfter: result.wallet.balance,
       amountDeducted: amount,
@@ -160,6 +166,7 @@ export async function deductCredits(params: DeductCreditParams): Promise<CreditR
     return {
       success: false,
       isUnlimited: false,
+      unlimited: false,
       balanceBefore: wallet.balance,
       balanceAfter: wallet.balance,
       amountDeducted: 0,

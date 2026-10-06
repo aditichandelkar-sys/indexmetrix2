@@ -29,6 +29,7 @@ model User {
   payments        Payment[]
   auditLogs       AuditLog[]
   indexJobs       IndexJob[]
+  indexingJobs    IndexingJob[]
 
   @@index([email])
   @@index([role])
@@ -87,19 +88,22 @@ model CreditTransaction {
 }
 
 model Project {
-  id          String                  @id @default(uuid())
-  userId      String
-  name        String
-  domain      String
-  description String?
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
+  id                String                  @id @default(uuid())
+  userId            String
+  name              String
+  domain            String
+  description       String?
+  googlePropertyId  String?
+  googlePropertyUrl String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
 
-  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  urls        Url[]
-  sitemaps    Sitemap[]
-  properties  SearchConsoleProperty[]
-  imports     Import[]
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  urls              Url[]
+  sitemaps          Sitemap[]
+  properties        SearchConsoleProperty[]
+  imports           Import[]
+  indexingJobs      IndexingJob[]
 
   @@index([userId])
   @@index([domain])
@@ -144,29 +148,36 @@ model SearchConsoleProperty {
 }
 
 model Url {
-  id                String             @id @default(uuid())
-  projectId         String
-  originalUrl       String
-  normalizedUrl     String
-  hostname          String
-  path              String
-  status            String             @default("IMPORTED")
-  httpStatus        Int?
-  lastCrawl         DateTime?
-  lastInspectedAt   DateTime?
-  lastAnalyzedAt    DateTime?
-  matchedPropertyId String?
-  creditsUsed       Int                @default(0)
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  id                      String             @id @default(uuid())
+  projectId               String
+  originalUrl             String
+  normalizedUrl           String
+  hostname                String
+  path                    String
+  status                  String             @default("UNINSPECTED")
+  httpStatus              Int?
+  lastCrawl               DateTime?
+  lastInspectedAt         DateTime?
+  lastAnalyzedAt          DateTime?
+  lastIndexedAt           DateTime?
+  lastGoogleVerdict       String?
+  lastCoverageState       String?
+  lastInspectionId        String?
+  discoveryStatus         String?
+  scheduledReinspectionAt DateTime?
+  matchedPropertyId       String?
+  creditsUsed             Int                @default(0)
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
-  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  matchedProperty   SearchConsoleProperty? @relation(fields: [matchedPropertyId], references: [id], onDelete: SetNull)
-  analyses          UrlAnalysis[]
-  inspections       GoogleInspection[]
-  statusHistory     UrlStatusHistory[]
-  indexJobs         IndexJob[]
-  crawlEvents       CrawlEvent[]
+  project                 Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  matchedProperty         SearchConsoleProperty? @relation(fields: [matchedPropertyId], references: [id], onDelete: SetNull)
+  analyses                UrlAnalysis[]
+  inspections             GoogleInspection[]
+  statusHistory           UrlStatusHistory[]
+  indexJobs               IndexJob[]
+  jobItems                IndexingJobItem[]
+  crawlEvents             CrawlEvent[]
 
   @@unique([projectId, normalizedUrl])
   @@index([projectId])
@@ -231,6 +242,59 @@ model GoogleInspection {
   url             Url      @relation(fields: [urlId], references: [id], onDelete: Cascade)
 
   @@index([urlId])
+}
+
+model IndexingJob {
+  id              String            @id @default(uuid())
+  userId          String
+  projectId       String
+  type            String            @default("DISCOVERY_AND_INSPECTION") // DISCOVERY_AND_INSPECTION | OFFICIAL_INDEXING_API | REINSPECT
+  status          String            @default("QUEUED") // QUEUED | PROCESSING | COMPLETED | PARTIAL | FAILED | CANCELLED
+  totalUrls       Int               @default(0)
+  queuedUrls      Int               @default(0)
+  processingUrls  Int               @default(0)
+  completedUrls   Int               @default(0)
+  failedUrls      Int               @default(0)
+  creditsCharged  Int               @default(0)
+  creditsRefunded Int               @default(0)
+  idempotencyKey  String?           @unique
+  metadata        String?
+  error           String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items           IndexingJobItem[]
+
+  @@index([userId])
+  @@index([projectId])
+  @@index([status])
+}
+
+model IndexingJobItem {
+  id              String       @id @default(uuid())
+  jobId           String
+  urlId           String
+  status          String       @default("QUEUED") // QUEUED | PROCESSING | COMPLETED | FAILED | CANCELLED
+  attempts        Int          @default(0)
+  maxAttempts     Int          @default(3)
+  lastError       String?
+  operationResult String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  nextRetryAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  job             IndexingJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  url             Url          @relation(fields: [urlId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([urlId])
+  @@index([status])
 }
 
 model IndexJob {

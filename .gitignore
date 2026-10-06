@@ -10,12 +10,16 @@
 
 # Production
 /build
+*.tsbuildinfo
 
 # Environment files
 .env
-.env*.local
+.env*
+!.env.example
+.env.local
 .env.development.local
 .env.test.local
+.env.production
 .env.production.local
 
 # Databases & local sqlite

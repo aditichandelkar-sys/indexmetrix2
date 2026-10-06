@@ -1,9 +1,14 @@
 /**
- * FAST INDEXER ENGINE (QuickIndexing / Multi-Vector Googlebot Crawl Trigger)
+ * FAST INDEXER ENGINE (Multi-Vector External Discovery Pipeline)
  * 
- * Enables immediate crawling and indexing dispatch for 3rd-party external URLs
- * (Forums, PDF uploads, parasite SEO, backlinks, web 2.0 properties)
- * without requiring Google Search Console domain ownership.
+ * Enables immediate discovery signal dispatch for public & 3rd-party external URLs
+ * (Forums, PDF uploads, backlinks, web 2.0 properties)
+ * through verified public crawl and discovery notification channels.
+ * 
+ * IMPORTANT:
+ * - Public feed syndication does not guarantee Googlebot crawling or indexing.
+ * - IndexNow requires legitimate domain key verification.
+ * - Relay gateways provide clean crawlable links but do not force indexing.
  */
 
 export interface FastIndexVectorResult {
@@ -26,17 +31,27 @@ export interface FastIndexExecutionSummary {
   scheduledNextCheck: string;
 }
 
+import { getAppBaseUrl } from './app-config';
+
 /**
- * Triggers multiple parallel Googlebot and search engine crawl notification vectors
+ * Triggers multiple parallel search engine discovery and crawl notification vectors
  */
 export async function dispatchFastIndexing(
   targetUrl: string,
-  options?: { appBaseUrl?: string; simulated?: boolean }
+  options?: { appBaseUrl?: string; simulated?: boolean; isOwnedDomain?: boolean }
 ): Promise<FastIndexExecutionSummary> {
   const startTime = Date.now();
-  const appBaseUrl = options?.appBaseUrl || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const appBaseUrl = options?.appBaseUrl || getAppBaseUrl();
   const isSimulated = options?.simulated ?? (process.env.NODE_ENV === 'test');
+  const isOwned = Boolean(options?.isOwnedDomain);
   const vectors: FastIndexVectorResult[] = [];
+
+  let targetHost = '';
+  try {
+    targetHost = new URL(targetUrl).hostname;
+  } catch {
+    targetHost = 'unknown';
+  }
 
   if (isSimulated) {
     const relaySlug = Buffer.from(targetUrl).toString('base64url').slice(0, 32);
@@ -44,15 +59,15 @@ export async function dispatchFastIndexing(
       targetUrl,
       overallStatus: 'DISPATCHED',
       totalVectors: 5,
-      successfulVectors: 5,
+      successfulVectors: isOwned ? 5 : 4,
       vectors: [
         {
           vector: 'GOOGLE_TRANSLATE_PROXY',
-          name: 'Googlebot Fetch Trigger (Translate Proxy)',
+          name: 'Public Translation Fetch Gateway',
           status: 'SUCCESS',
           statusCode: 200,
           latencyMs: 12,
-          message: 'Googlebot backend crawler fetch request dispatched via Google translation gateway',
+          message: 'Public translation proxy fetch dispatched (Note: does not guarantee search engine indexing)',
           timestamp: new Date().toISOString(),
         },
         {
@@ -61,7 +76,7 @@ export async function dispatchFastIndexing(
           status: 'SUCCESS',
           statusCode: 204,
           latencyMs: 8,
-          message: 'Published realtime notification to Google WebSub hub for immediate bot ingestion',
+          message: 'Published realtime notification to Google WebSub hub for feed syndication',
           timestamp: new Date().toISOString(),
         },
         {
@@ -70,25 +85,27 @@ export async function dispatchFastIndexing(
           status: 'SUCCESS',
           statusCode: 200,
           latencyMs: 15,
-          message: 'Sitemap crawl trigger successfully dispatched to search engine ping endpoints',
+          message: 'Sitemap ping notification dispatched to public search engine endpoints',
           timestamp: new Date().toISOString(),
         },
         {
           vector: 'INDEXNOW_API',
           name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
-          status: 'SUCCESS',
-          statusCode: 200,
+          status: isOwned ? 'SUCCESS' : 'SKIPPED',
+          statusCode: isOwned ? 200 : undefined,
           latencyMs: 10,
-          message: 'Instant notification transmitted to IndexNow multi-engine network',
+          message: isOwned
+            ? 'Instant notification transmitted to IndexNow protocol network'
+            : 'NOT_AUTHORIZED_FOR_INDEXNOW: Target domain key cannot be verified on unowned third-party domain.',
           timestamp: new Date().toISOString(),
         },
         {
           vector: 'RELAY_GATEWAY',
-          name: 'Dynamic High-Authority Crawl Gateway',
+          name: 'Crawlable Gateway Relay',
           status: 'SUCCESS',
           statusCode: 200,
           latencyMs: 2,
-          message: `Active gateway link established at ${appBaseUrl}/relay/${relaySlug}`,
+          message: `Crawlable gateway bridge available at ${appBaseUrl}/relay/${relaySlug} (provides navigation bridge; does not force bot indexing)`,
           timestamp: new Date().toISOString(),
         },
       ],
@@ -97,9 +114,9 @@ export async function dispatchFastIndexing(
     };
   }
 
-  // Execute all 5 crawl vectors simultaneously in parallel for sub-4s response
+  // Execute crawl vectors simultaneously in parallel
   const [v1, v2, v3, v4, v5] = await Promise.all([
-    // VECTOR 1: Googlebot Direct Proxy Crawl Trigger (Google Translate Fetcher)
+    // VECTOR 1: Public Translation Fetch Request
     (async (): Promise<FastIndexVectorResult> => {
       const vStart = Date.now();
       try {
@@ -120,20 +137,20 @@ export async function dispatchFastIndexing(
         const latency = Date.now() - vStart;
         return {
           vector: 'GOOGLE_TRANSLATE_PROXY',
-          name: 'Googlebot Fetch Trigger (Translate Proxy)',
+          name: 'Public Translation Fetch Gateway',
           status: 'SUCCESS',
           statusCode: res ? res.status : 200,
           latencyMs: latency,
-          message: 'Googlebot backend crawler fetch request dispatched via Google translation gateway',
+          message: 'Public translation proxy fetch dispatched (Note: does not guarantee search engine indexing)',
           timestamp: new Date().toISOString(),
         };
       } catch (err: any) {
         return {
           vector: 'GOOGLE_TRANSLATE_PROXY',
-          name: 'Googlebot Fetch Trigger (Translate Proxy)',
+          name: 'Public Translation Fetch Gateway',
           status: 'WARNING',
           latencyMs: Date.now() - vStart,
-          message: `Google proxy signal transmitted: ${err.message}`,
+          message: `Translation gateway fetch notice: ${err.message}`,
           timestamp: new Date().toISOString(),
         };
       }
@@ -143,7 +160,7 @@ export async function dispatchFastIndexing(
     (async (): Promise<FastIndexVectorResult> => {
       const vStart = Date.now();
       try {
-        const hubUrl = 'https://pubsubhubbub.appspot.com/';
+        const hubUrl = process.env.WEBSUB_HUB_URL || 'https://pubsubhubbub.appspot.com/';
         const topicUrl = `${appBaseUrl}/api/feeds/rapid-rss.xml`;
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 4000);
@@ -167,16 +184,16 @@ export async function dispatchFastIndexing(
           status: 'SUCCESS',
           statusCode: res ? res.status : 204,
           latencyMs: Date.now() - vStart,
-          message: 'Published realtime notification to Google WebSub hub for immediate bot ingestion',
+          message: 'Published realtime notification to Google WebSub hub for feed syndication',
           timestamp: new Date().toISOString(),
         };
       } catch (err: any) {
         return {
           vector: 'GOOGLE_PUBSUBHUBBUB',
           name: 'Google WebSub Realtime Hub',
-          status: 'SUCCESS',
+          status: 'WARNING',
           latencyMs: Date.now() - vStart,
-          message: 'WebSub hub notification queued',
+          message: `WebSub hub notice: ${err.message}`,
           timestamp: new Date().toISOString(),
         };
       }
@@ -205,7 +222,7 @@ export async function dispatchFastIndexing(
           status: 'SUCCESS',
           statusCode: 200,
           latencyMs: Date.now() - vStart,
-          message: 'Sitemap crawl trigger successfully dispatched to search engine ping endpoints',
+          message: 'Sitemap ping notification dispatched to public search engine endpoints',
           timestamp: new Date().toISOString(),
         };
       } catch (err: any) {
@@ -220,23 +237,33 @@ export async function dispatchFastIndexing(
       }
     })(),
 
-    // VECTOR 4: IndexNow Real-time Protocol
+    // VECTOR 4: IndexNow Real-time Protocol (Strict domain key validation per Rule 9)
     (async (): Promise<FastIndexVectorResult> => {
       const vStart = Date.now();
-      try {
-        const urlObj = new URL(targetUrl);
-        const host = urlObj.hostname;
+      if (!isOwned) {
+        return {
+          vector: 'INDEXNOW_API',
+          name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
+          status: 'SKIPPED',
+          statusCode: undefined,
+          latencyMs: Date.now() - vStart,
+          message: 'NOT_AUTHORIZED_FOR_INDEXNOW: Target domain key cannot be verified on unowned third-party domain.',
+          timestamp: new Date().toISOString(),
+        };
+      }
 
+      try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const indexNowKey = process.env.INDEXNOW_KEY || 'indexmatrix_key';
 
         const res = await fetch('https://api.indexnow.org/indexnow', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json; charset=utf-8' },
           body: JSON.stringify({
-            host,
-            key: 'indexmatrix_quick_indexer_key',
-            keyLocation: `${appBaseUrl}/indexnow-key.txt`,
+            host: targetHost,
+            key: indexNowKey,
+            keyLocation: `https://${targetHost}/${indexNowKey}.txt`,
             urlList: [targetUrl],
           }),
           signal: controller.signal,
@@ -249,16 +276,16 @@ export async function dispatchFastIndexing(
           status: 'SUCCESS',
           statusCode: res ? res.status : 200,
           latencyMs: Date.now() - vStart,
-          message: 'Instant notification transmitted to IndexNow multi-engine network',
+          message: 'Instant notification transmitted to IndexNow protocol network',
           timestamp: new Date().toISOString(),
         };
       } catch (err: any) {
         return {
           vector: 'INDEXNOW_API',
           name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
-          status: 'SUCCESS',
+          status: 'WARNING',
           latencyMs: Date.now() - vStart,
-          message: 'IndexNow signal transmitted',
+          message: `IndexNow dispatch notice: ${err.message}`,
           timestamp: new Date().toISOString(),
         };
       }
@@ -271,11 +298,11 @@ export async function dispatchFastIndexing(
       const relayUrl = `${appBaseUrl}/relay/${relaySlug}`;
       return {
         vector: 'RELAY_GATEWAY',
-        name: 'Dynamic High-Authority Crawl Gateway',
+        name: 'Crawlable Gateway Relay',
         status: 'SUCCESS',
         statusCode: 200,
         latencyMs: Date.now() - vStart,
-        message: `Active gateway link established at ${relayUrl}`,
+        message: `Crawlable gateway bridge available at ${relayUrl} (provides navigation bridge; does not force bot indexing)`,
         timestamp: new Date().toISOString(),
       };
     })(),
@@ -293,6 +320,6 @@ export async function dispatchFastIndexing(
     successfulVectors: successCount,
     vectors,
     dispatchDurationMs: totalDuration,
-    scheduledNextCheck: new Date(Date.now() + 1000 * 60 * 15).toISOString(), // 15 mins later
+    scheduledNextCheck: new Date(Date.now() + 1000 * 60 * 15).toISOString(),
   };
 }

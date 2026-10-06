@@ -14,6 +14,7 @@ function GoogleConnectionsContent() {
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const loadData = async () => {
@@ -23,6 +24,12 @@ function GoogleConnectionsContent() {
         fetch('/api/google/properties'),
         fetch('/api/projects'),
       ]);
+
+      if (accRes.status === 401 || projRes.status === 401) {
+        window.location.href = '/login?returnUrl=/google';
+        return;
+      }
+
       const accData = await accRes.json();
       const projData = await projRes.json();
 
@@ -37,16 +44,52 @@ function GoogleConnectionsContent() {
   useEffect(() => {
     loadData();
     if (successParam === 'connected') {
-      setNotification({ type: 'success', text: 'Google Search Console account linked successfully!' });
+      setNotification({ type: 'success', text: 'Google Search Console account linked successfully! Properties synchronized.' });
     } else if (errorParam) {
       setNotification({ type: 'error', text: `OAuth authorization error: ${errorParam}` });
     }
-  }, []);
+  }, [successParam, errorParam]);
+
+  const handleSyncProperties = async (accountId?: string) => {
+    setSyncingId(accountId || 'all');
+    try {
+      const res = await fetch('/api/google/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(accountId ? { accountId } : {}),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        if (data.accounts) setAccounts(data.accounts);
+        setNotification({
+          type: 'success',
+          text: `Google Search Console properties synchronized successfully (${data.syncedCount} found).`,
+        });
+      } else {
+        setNotification({
+          type: 'error',
+          text: data.error || 'Failed to sync Google Search Console properties.',
+        });
+      }
+    } catch {
+      setNotification({
+        type: 'error',
+        text: 'Network error occurred while syncing properties with Google Search Console.',
+      });
+    } finally {
+      setSyncingId(null);
+    }
+  };
 
   const handleConnectGoogle = async () => {
     setActionLoading(true);
     try {
       const res = await fetch('/api/google/auth');
+      if (res.status === 401) {
+        window.location.href = '/login?returnUrl=/google';
+        return;
+      }
       const data = await res.json();
       if (data.success && data.authUrl) {
         window.location.href = data.authUrl;
@@ -93,14 +136,26 @@ function GoogleConnectionsContent() {
         title="Google Search Console Connections"
         description="Authorize official API access to inspect URLs and synchronize properties"
       >
-        <button
-          onClick={handleConnectGoogle}
-          disabled={actionLoading}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-brand-600 to-cyan-500 hover:from-brand-500 hover:to-cyan-400 text-white text-xs font-semibold shadow-md shadow-brand-500/25 transition-all"
-        >
-          <Search className="w-4 h-4" />
-          <span>{actionLoading ? 'Connecting...' : 'Connect Google Account'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {accounts.length > 0 && (
+            <button
+              onClick={() => handleSyncProperties()}
+              disabled={syncingId !== null}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-semibold transition-all disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${syncingId === 'all' ? 'animate-spin' : ''}`} />
+              <span>{syncingId === 'all' ? 'Syncing...' : 'Sync All'}</span>
+            </button>
+          )}
+          <button
+            onClick={handleConnectGoogle}
+            disabled={actionLoading}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-brand-600 to-cyan-500 hover:from-brand-500 hover:to-cyan-400 text-white text-xs font-semibold shadow-md shadow-brand-500/25 transition-all"
+          >
+            <Search className="w-4 h-4" />
+            <span>{actionLoading ? 'Connecting...' : 'Connect Google Account'}</span>
+          </button>
+        </div>
       </DashboardHeader>
 
       <div className="p-6 max-w-5xl space-y-6">
@@ -112,8 +167,8 @@ function GoogleConnectionsContent() {
                 : 'bg-rose-500/10 border-rose-500/20 text-rose-300'
             }`}
           >
-            <span>{notification.text}</span>
-            <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-white">✕</button>
+            <span className="leading-relaxed">{notification.text}</span>
+            <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-white shrink-0 ml-3">✕</button>
           </div>
         )}
 
@@ -157,7 +212,7 @@ function GoogleConnectionsContent() {
           ) : (
             accounts.map((acc) => (
               <div key={acc.id} className="glass-panel p-6 rounded-2xl border border-white/5 space-y-5">
-                <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-white/5 pb-4 gap-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-cyan-500/10 flex items-center justify-center text-cyan-400">
                       <Search className="w-5 h-5" />
@@ -170,63 +225,86 @@ function GoogleConnectionsContent() {
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => handleDisconnect(acc.id)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs transition-colors"
-                  >
-                    <Unlink className="w-3.5 h-3.5" />
-                    <span>Disconnect</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleSyncProperties(acc.id)}
+                      disabled={syncingId === acc.id || syncingId === 'all'}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/20 text-xs font-medium transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingId === acc.id ? 'animate-spin' : ''}`} />
+                      <span>{syncingId === acc.id ? 'Syncing...' : 'Sync Properties'}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDisconnect(acc.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs transition-colors"
+                    >
+                      <Unlink className="w-3.5 h-3.5" />
+                      <span>Disconnect</span>
+                    </button>
+                  </div>
                 </div>
 
-                {/* Properties Table */}
-                <div className="space-y-2">
-                  <span className="text-xs font-semibold text-slate-300">
+                {/* Properties Section */}
+                <div className="space-y-3">
+                  <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider font-mono">
                     Authorized Search Console Properties ({acc.properties?.length || 0})
                   </span>
 
-                  <div className="overflow-x-auto rounded-xl border border-white/5">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-[#090e1a] text-slate-400 font-mono uppercase text-[10px]">
-                        <tr>
-                          <th className="px-4 py-2.5">Property URL</th>
-                          <th className="px-4 py-2.5">Type</th>
-                          <th className="px-4 py-2.5">Permission</th>
-                          <th className="px-4 py-2.5">Linked Workspace Project</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5 text-slate-300">
-                        {acc.properties?.map((prop: any) => {
-                          const isDomain = prop.propertyUrl.startsWith('sc-domain:');
-                          return (
-                            <tr key={prop.id} className="hover:bg-white/[0.02]">
-                              <td className="px-4 py-3 font-mono font-medium text-white">{prop.propertyUrl}</td>
-                              <td className="px-4 py-3">
-                                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 text-slate-300">
-                                  {isDomain ? 'Domain Property' : 'URL Prefix'}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-slate-400">{prop.permissionLevel || 'siteOwner'}</td>
-                              <td className="px-4 py-3">
-                                <select
-                                  value={prop.projectId || ''}
-                                  onChange={(e) => handleLinkProperty(prop.id, e.target.value || null)}
-                                  className="px-2.5 py-1 rounded-lg bg-[#090e1a] border border-white/10 text-white text-xs focus:outline-none focus:border-brand-500"
-                                >
-                                  <option value="">Unlinked (Select Project)</option>
-                                  {projects.map((p) => (
-                                    <option key={p.id} value={p.id}>
-                                      {p.name} ({p.domain})
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                  {acc.properties && acc.properties.length > 0 ? (
+                    <div className="overflow-x-auto rounded-xl border border-white/5">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-[#090e1a] text-slate-400 font-mono uppercase text-[10px]">
+                          <tr>
+                            <th className="px-4 py-2.5">Property URL</th>
+                            <th className="px-4 py-2.5">Type</th>
+                            <th className="px-4 py-2.5">Permission / Access</th>
+                            <th className="px-4 py-2.5">Linked Workspace Project</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5 text-slate-300">
+                          {acc.properties.map((prop: any) => {
+                            const isDomain = prop.propertyUrl.startsWith('sc-domain:');
+                            return (
+                              <tr key={prop.id} className="hover:bg-white/[0.02]">
+                                <td className="px-4 py-3 font-mono font-medium text-white">{prop.propertyUrl}</td>
+                                <td className="px-4 py-3">
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 text-slate-300">
+                                    {isDomain ? 'Domain Property' : 'URL Prefix'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span className="text-[11px] text-cyan-300 font-mono capitalize">
+                                    {prop.permissionLevel || 'siteOwner'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <select
+                                    value={prop.projectId || ''}
+                                    onChange={(e) => handleLinkProperty(prop.id, e.target.value || null)}
+                                    className="px-2.5 py-1 rounded-lg bg-[#090e1a] border border-white/10 text-white text-xs focus:outline-none focus:border-brand-500"
+                                  >
+                                    <option value="">Unlinked (Select Project)</option>
+                                    {projects.map((p) => (
+                                      <option key={p.id} value={p.id}>
+                                        {p.name} ({p.domain})
+                                      </option>
+                                    ))}
+                                  </select>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="p-6 rounded-xl bg-surface-200/30 border border-white/5 text-center text-xs text-slate-400 space-y-1">
+                      <p className="text-slate-300 font-medium">No Search Console properties found for this Google account.</p>
+                      <p className="text-[11px] text-slate-500">
+                        Ensure this Google account has verified ownership or user access on domains in Google Search Console, then click &quot;Sync Properties&quot;.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             ))

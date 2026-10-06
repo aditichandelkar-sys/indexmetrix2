@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     const account = await prisma.googleAccount.findFirst({
       where: {
         id: accountId,
-        ...(user.role === 'OWNER' ? {} : { userId: user.id }),
+        userId: user.id,
       },
     });
 

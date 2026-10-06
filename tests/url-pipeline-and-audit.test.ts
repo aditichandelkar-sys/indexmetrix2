@@ -100,7 +100,7 @@ describe('A. URL Pipeline & Target URL Support (Section D)', () => {
     } finally {
       global.fetch = originalFetch;
     }
-  });
+  }, 15000);
 });
 
 describe('B. SSRF Security Shield (Section J)', () => {

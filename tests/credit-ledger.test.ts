@@ -8,8 +8,8 @@ describe('Credit Engine & Transaction Ledger', () => {
 
   beforeAll(async () => {
     // Look up seeded users
-    ownerUser = await prisma.user.findUnique({
-      where: { email: 'owner@indexmatrix.io' },
+    ownerUser = await prisma.user.findFirst({
+      where: { role: 'OWNER' },
     });
 
     customerUser = await prisma.user.findUnique({

@@ -27,12 +27,21 @@ export interface PropertyMatchResult {
 export function normalizeUrl(rawUrl: string): { url: URL | null; error?: string } {
   try {
     let clean = rawUrl.trim();
+    if (/^[a-z0-9+.-]+:/i.test(clean) && !/^https?:\/\//i.test(clean)) {
+      return { url: null, error: 'Only HTTP and HTTPS protocols are allowed' };
+    }
     if (!/^https?:\/\//i.test(clean)) {
       clean = 'https://' + clean;
     }
     const parsed = new URL(clean);
-    // Lowercase hostname
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { url: null, error: 'Only HTTP and HTTPS protocols are allowed' };
+    }
     parsed.hostname = parsed.hostname.toLowerCase();
+    // Strip trailing slash unless it's just "/"
+    if (parsed.pathname.length > 1 && parsed.pathname.endsWith('/')) {
+      parsed.pathname = parsed.pathname.slice(0, -1);
+    }
     return { url: parsed };
   } catch (err: any) {
     return { url: null, error: err.message || 'Invalid URL' };
@@ -106,10 +115,10 @@ export function matchesSearchConsoleProperty(targetUrl: string, propertyIdentifi
 /**
  * Finds the best matching property from an array of authorized Search Console properties
  */
-export function findBestMatchingProperty(
+export function findBestMatchingProperty<T extends { id: string; propertyUrl: string }>(
   targetUrl: string,
-  properties: Array<{ id: string; propertyUrl: string }>
-): { property: { id: string; propertyUrl: string } | null; matchType: 'EXACT_PREFIX' | 'DOMAIN' | null } {
+  properties: T[]
+): { property: T | null; matchType: 'EXACT_PREFIX' | 'DOMAIN' | null } {
   const matching = properties.filter(p => matchesSearchConsoleProperty(targetUrl, p.propertyUrl));
 
   if (matching.length === 0) {

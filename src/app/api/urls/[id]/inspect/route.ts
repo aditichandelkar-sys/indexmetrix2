@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
+import { validateUrlForSSRF } from '@/lib/ssrf';
+import { findBestMatchingProperty } from '@/lib/property-matcher';
 import { deductCredits, addCredits, CREDIT_COSTS } from '@/lib/credit-ledger';
-import { inspectUrlWithGoogle } from '@/lib/google-client';
+import { inspectUrlWithGoogle, sanitizeGoogleError } from '@/lib/google-client';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -27,25 +31,66 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: false, error: 'URL not found' }, { status: 404 });
     }
 
-    if (!urlRecord.matchedProperty || !urlRecord.matchedProperty.googleAccount) {
+    // SSRF Check
+    const ssrfCheck = await validateUrlForSSRF(urlRecord.normalizedUrl);
+    if (!ssrfCheck.isSafe) {
       return NextResponse.json(
         {
           success: false,
           error: {
-            code: 'NO_MATCHED_PROPERTY',
-            message: 'This URL does not match an authorized Google Search Console property. Please connect your Google account and link the property to this project first.',
+            code: 'SSRF_BLOCKED',
+            message: `URL security policy violation: ${ssrfCheck.reason}`,
+          },
+        },
+        { status: 403 }
+      );
+    }
+
+    // Resolve matched property with strict tenant isolation
+    let matchedProperty = urlRecord.matchedProperty;
+    if (!matchedProperty || !matchedProperty.googleAccount || matchedProperty.googleAccount.userId !== user.id) {
+      const userProperties = await prisma.searchConsoleProperty.findMany({
+        where: {
+          googleAccount: {
+            userId: user.id,
+            status: 'ACTIVE',
+          },
+          isVerified: true,
+        },
+        include: {
+          googleAccount: true,
+        },
+      });
+
+      const match = findBestMatchingProperty(urlRecord.normalizedUrl, userProperties);
+      if (match.property) {
+        matchedProperty = (userProperties.find((p) => p.id === match.property!.id) as any) || null;
+        if (matchedProperty) {
+          await prisma.url.update({
+            where: { id: urlRecord.id },
+            data: { matchedPropertyId: matchedProperty.id },
+          });
+        }
+      }
+    }
+
+    if (!matchedProperty || !matchedProperty.googleAccount) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'PROPERTY_NOT_AUTHORIZED',
+            message: 'This URL does not match any authorized Google Search Console property connected to your account. Please connect your Google account and verify property ownership on the /google page.',
           },
         },
         { status: 400 }
       );
     }
 
-    const property = urlRecord.matchedProperty;
-    const googleAccount = property.googleAccount;
-
+    const googleAccount = matchedProperty.googleAccount;
     const idempotencyKey = `inspect_${urlRecord.id}_${Date.now()}`;
 
-    // Deduct credits (2 credits for Google Search Console URL inspection)
+    // Deduct credits (2 credits for Google Search Console URL inspection, bypassed for OWNER)
     const creditResult = await deductCredits({
       userId: user.id,
       amount: CREDIT_COSTS.GOOGLE_INSPECTION,
@@ -74,7 +119,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       inspection = await inspectUrlWithGoogle(
         googleAccount.id,
         urlRecord.normalizedUrl,
-        property.propertyUrl
+        matchedProperty.propertyUrl
       );
     } catch (apiErr: any) {
       if (creditResult.amountDeducted > 0) {
@@ -82,18 +127,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           userId: user.id,
           amount: creditResult.amountDeducted,
           type: 'REFUND',
-          reason: `Refund for failed Google inspection: ${apiErr.message}`,
+          reason: `Refund for failed Google inspection: ${sanitizeGoogleError(apiErr.message)}`,
         });
       }
       return NextResponse.json(
         {
           success: false,
           error: {
-            code: apiErr.message?.includes('CONNECTION_REQUIRED') ? 'CONNECTION_REQUIRED' : 'GOOGLE_INSPECTION_FAILED',
-            message: apiErr.message,
+            code: 'GOOGLE_API_ERROR',
+            message: sanitizeGoogleError(apiErr.message),
           },
         },
-        { status: 400 }
+        { status: 502 }
       );
     }
 
@@ -116,11 +161,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       },
     });
 
-    // Update status
-    let newStatus = urlRecord.status;
-    if (ir.verdict === 'PASS' || (ir.coverageState && ir.coverageState.toLowerCase().includes('indexed'))) {
+    // Update status accurately
+    let newStatus = 'NOT_INDEXED';
+    const coverage = (ir.coverageState || '').toLowerCase();
+    if (ir.verdict === 'PASS' || coverage.includes('submitted and indexed') || coverage.includes('indexed, not in sitemap')) {
       newStatus = 'INDEXED';
-    } else if (ir.verdict === 'FAIL' || (ir.coverageState && ir.coverageState.toLowerCase().includes('not indexed'))) {
+    } else {
       newStatus = 'NOT_INDEXED';
     }
 
@@ -146,10 +192,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({
       success: true,
       inspection: {
-        ...ir,
         id: savedInspection.id,
+        verdict: ir.verdict,
+        coverageState: ir.coverageState || null,
+        indexingState: ir.indexingState || null,
+        robotsTxtState: ir.robotsTxtState || null,
+        pageFetchState: ir.pageFetchState || null,
+        googleCanonical: ir.googleCanonical || null,
+        userCanonical: ir.userCanonical || null,
+        crawledAs: ir.crawledAs || null,
+        lastCrawlTime: ir.lastCrawlTime || null,
+        referringUrls: ir.referringUrls || [],
+        inspectionResultLink: inspection.inspectionResultLink || null,
+        inspectedAt: savedInspection.inspectedAt,
       },
-      newStatus,
+      status: newStatus,
       creditsDeducted: creditResult.amountDeducted,
       remainingBalance: creditResult.isUnlimited ? 'UNLIMITED' : creditResult.balanceAfter,
     });

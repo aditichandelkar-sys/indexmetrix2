@@ -82,7 +82,8 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Process each valid URL through Credit Ledger and Fast Indexer
-    const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+    const { getAppBaseUrl } = await import('@/lib/app-config');
+    const appBaseUrl = getAppBaseUrl();
     const results: FastIndexExecutionSummary[] = [];
 
     for (const item of validUrls) {
@@ -144,68 +145,19 @@ export async function POST(req: NextRequest) {
       // Execute multi-vector crawl triggers
       const dispatchSummary = await dispatchFastIndexing(item.normalized, { appBaseUrl });
 
-      // If Master Google Service Account is configured, also push to official Google Indexing API
+      // If Master Google Service Account is configured, verify eligibility before calling Indexing API
       const masterCreds = await getMasterServiceAccount();
       if (masterCreds) {
-        try {
-          // 1. Try direct URL first
-          let gRes = await publishToGoogleIndexingApi(item.normalized, masterCreds);
-
-          // 2. If Google rejects with ownership verification (because it's a 3rd-party domain like proboards or external PDF),
-          // fallback to the QuickIndexing Relay Gateway URL method!
-          const isOwnershipError = gRes.error && (
-            gRes.error.message.includes('ownership') ||
-            gRes.error.message.includes('Permission denied') ||
-            gRes.error.code === 403
-          );
-
-          const relaySlug = Buffer.from(item.normalized).toString('base64url').slice(0, 32);
-          const relayUrl = `${appBaseUrl}/relay/${relaySlug}`;
-
-          if (isOwnershipError) {
-            // Attempt publishing the Relay Gateway URL
-            const relayGRes = await publishToGoogleIndexingApi(relayUrl, masterCreds);
-            if (!relayGRes.error) {
-              gRes = relayGRes;
-            } else if (gRes.error) {
-              gRes.error.message = `Google Ownership Policy: Direct 3rd-party domain requires site verification. Googlebot dispatched via Relay Gateway (${relayUrl}) & Translation Crawler.`;
-            }
-          }
-
-          if (gRes.error) {
-            dispatchSummary.vectors.push({
-              vector: 'GOOGLE_INDEXING_API',
-              name: `Official Google Indexing API (${masterCreds.client_email})`,
-              status: 'WARNING',
-              statusCode: gRes.error.code,
-              latencyMs: 350,
-              message: gRes.error.message,
-              timestamp: new Date().toISOString(),
-            });
-          } else {
-            dispatchSummary.vectors.push({
-              vector: 'GOOGLE_INDEXING_API',
-              name: `Official Google Indexing API (${masterCreds.client_email})`,
-              status: 'SUCCESS',
-              statusCode: 200,
-              latencyMs: 320,
-              message: `Official Google Indexing API confirmed receipt (NotifyTime: ${gRes.notifyTime})`,
-              timestamp: new Date().toISOString(),
-            });
-            dispatchSummary.successfulVectors++;
-          }
-          dispatchSummary.totalVectors++;
-        } catch (gErr: any) {
-          dispatchSummary.vectors.push({
-            vector: 'GOOGLE_INDEXING_API',
-            name: 'Official Google Indexing API',
-            status: 'WARNING',
-            latencyMs: 100,
-            message: `Service account call notice: ${gErr.message}`,
-            timestamp: new Date().toISOString(),
-          });
-          dispatchSummary.totalVectors++;
-        }
+        // Google Indexing API is strictly restricted to supported content per Google's official documentation
+        dispatchSummary.vectors.push({
+          vector: 'GOOGLE_INDEXING_API',
+          name: 'Official Google Indexing API',
+          status: 'SKIPPED',
+          latencyMs: 1,
+          message: 'Google Indexing API is restricted to supported content types (JobPosting / BroadcastEvent). Standard third-party pages are not eligible.',
+          timestamp: new Date().toISOString(),
+        });
+        dispatchSummary.totalVectors++;
       }
 
       // Record audit history

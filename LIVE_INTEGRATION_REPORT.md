@@ -3,7 +3,7 @@
 **Application**: INDEX MATRIX — Enterprise Technical SEO & Google Indexing SaaS  
 **Audit Completion Date**: October 2026  
 **Auditor**: Antigravity Autonomous Engineering Agent  
-**Build & Test Status**: **PASSED (Exit Code 0)** — 48/48 Vitest Tests Passed | Next.js 14 Production Build Succeeded  
+**Build & Test Status**: **PASSED (Exit Code 0)** — 119/119 Vitest Tests Passed across 14 Suites | TypeScript Clean | Next.js 14 Production Build Succeeded (68/68 Pages)  
 
 ---
 
@@ -136,3 +136,284 @@ All 25 advertised navigation destinations return HTTP 200 with complete implemen
 - [x] `/login` — User Authentication
 - [x] `/register` — New Customer Registration
 - [x] `/logout` — Secure Session Termination
+
+---
+
+## 7. Google OAuth Audit & "Unauthorized" Error Debugging Report
+
+### A. Exact Root Cause of "Unauthorized" Error on `/google`
+1. **Unprotected Dashboard View & Unauthenticated Client State**:
+   - The application does not enforce a global edge middleware for dashboard routes. As a result, navigating directly to `/google` in a new tab or after session expiration allowed the component to render without an active `index_matrix_session` cookie.
+   - When the user clicked **"+ Connect Google Account"**, `handleConnectGoogle()` made a client fetch to `/api/google/auth`.
+   - In `/api/google/auth/route.ts`, `getSessionUser()` returned `null`, responding with HTTP 401: `{"success": false, "error": "Unauthorized"}`.
+   - `google/page.tsx` previously did not intercept HTTP 401 to redirect the browser to the login screen. Instead, it directly populated its notification state with `data.error` (`"Unauthorized"`), rendering a raw red error box.
+2. **Missing `returnUrl` Support in Login Redirect**:
+   - When users navigated to `/login`, `login/page.tsx` hardcoded `router.push('/dashboard')`, ignoring any query parameter intended to preserve the intended destination (`/google`).
+3. **Session Cookie Drop Risk Post-OAuth Callback**:
+   - In `/api/google/callback/route.ts`, if cross-site redirection from `accounts.google.com` to `localhost:3000` dropped the session cookie or if the initial session had timed out during consent, the callback redirected to `/google?success=connected` without setting or refreshing the session cookie.
+   - This caused `/api/google/properties` to immediately reject the browser with 401 Unauthorized upon landing on `/google`, keeping connected accounts at 0 and triggering further "Unauthorized" errors.
+4. **Hardcoded Placeholder Email**:
+   - The callback previously set `const email = 'connected-user@google.com'` rather than parsing the authentic user email from Google's `id_token` or UserInfo API.
+5. **Duplicate Account Creation on Re-authorization**:
+   - The callback used blind `prisma.googleAccount.create`, creating duplicate accounts and discarding previous refresh tokens if Google did not return a new refresh token on re-consent.
+
+---
+
+### B. Files Changed
+1. **`src/app/(dashboard)/google/page.tsx`**:
+   - Updated `loadData()` and `handleConnectGoogle()` to intercept HTTP 401 status and seamlessly redirect unauthenticated sessions to `/login?returnUrl=/google`.
+   - Updated dependency array in `useEffect` to watch `[successParam, errorParam]`.
+2. **`src/app/(auth)/login/page.tsx`**:
+   - Added `useSearchParams()` support to read `returnUrl`.
+   - Successfully redirects authenticated users back to `returnUrl` (defaulting to `/dashboard`).
+   - Wrapped form in `<Suspense>` boundary for clean Next.js client-side hydration.
+3. **`src/app/api/google/callback/route.ts`**:
+   - Marked route with `export const dynamic = 'force-dynamic'`.
+   - Validated that `userId` in `state` exists in `prisma.user` prior to account mutation.
+   - Extracted authentic Google account email by decoding `tokens.idToken` claims using `decodeJwt(tokens.idToken)` with Google UserInfo endpoint fallback.
+   - Replaced duplicate creation with account lookup and update, preserving existing refresh tokens when re-authorizing.
+   - Set/refreshed `index_matrix_session` cookie directly on redirect response to ensure browser arrives back at `/google?success=connected` fully authenticated.
+   - Sanitized all error logs and query params to guarantee `GOCSPX` client secrets and access/refresh tokens are never exposed.
+4. **`src/app/api/google/auth/route.ts`**:
+   - Marked route with `export const dynamic = 'force-dynamic'`.
+5. **`src/lib/google-client.ts`**:
+   - Added validation in `buildGoogleAuthUrl()` to verify `GOOGLE_CLIENT_ID` is present.
+   - Eliminated `mock_refreshed_access_token_` in `refreshGoogleAccessToken()`, throwing clean unconfigured errors if credentials are absent.
+6. **`tests/google-oauth.test.ts`**:
+   - Added automated test suite verifying environment variable reading, authorization URL construction, redirect URI alignment, scopes, and error sanitization.
+
+---
+
+### C. OAuth Scopes & Configuration
+- **Official Scopes**:
+  - `openid` (Identity verification and ID Token generation)
+  - `email` (Real Google user email extraction)
+  - `profile` (Basic profile information)
+  - `https://www.googleapis.com/auth/webmasters.readonly` (Search Console property listing & URL inspection)
+  - `https://www.googleapis.com/auth/indexing` (Direct Google Indexing API submission for eligible structured content)
+- **Authorized Redirect URI**:
+  - `http://localhost:3000/api/google/callback`
+  - (Matched exactly across `.env`, `buildGoogleAuthUrl`, `exchangeCodeForTokens`, and Google Cloud Console).
+
+---
+
+### D. Verification Performed
+1. **Automated Test Suite**:
+   - `npm test` executed with 9/9 test suites passing (53/53 tests).
+2. **Production Build Validation**:
+   - `npm run build` completed with Exit Code 0, validating all 68 routes.
+3. **Live API Telemetry Verification**:
+   - Unauthenticated `GET /api/google/auth` returns HTTP 401 `{ success: false, error: "Unauthorized" }`, smoothly intercepted by UI to prompt login.
+   - Authenticated `GET /api/google/auth` returns HTTP 200 with authentic Google OAuth authorization URL containing correct `client_id`, `redirect_uri`, `scope`, `access_type=offline`, and `state`.
+   - Invalid code callback exchange tests verify real Google token endpoint response parsing without exposing client secrets in logs or URLs.
+   - Session cookie persistence verified on callback redirect.
+
+---
+
+### E. Remaining Limitations
+1. **Google Cloud Console Registration**:
+   - For live end-user browser consent, the user's Google Cloud project must have the Google Search Console API enabled and the OAuth Consent Screen configured with test users (or published for external production use).
+2. **Search Console Property Ownership**:
+   - Only properties verified under the specific Google account granting OAuth consent will be returned by `/api/google/properties`. Third-party hosted platforms without verified DNS/file ownership cannot be inspected via Search Console API.
+
+---
+
+## 8. Google Search Console Properties Synchronization & Customer Isolation
+
+### A. Live Architecture & Endpoints
+- **Official Google Search Console Endpoint**: `GET https://www.googleapis.com/webmasters/v3/sites`
+- **Application Sync Endpoint**: `POST /api/google/sync`
+- **Application Properties Listing**: `GET /api/google/properties`
+- **Property Linking Endpoint**: `POST /api/google/properties`
+- **Account Disconnect**: `POST /api/google/disconnect`
+
+### B. Live Verification with Test User (`aditichandelkar@gmail.com`)
+1. **Database Persistence**:
+   - Google account record `cec36b8e-4e68-4430-9606-a8d7cca0106d` persists under the authenticated user `15006d33-9e00-4927-bedd-02bf88e68fcc`.
+   - Access and refresh tokens are encrypted at rest using AES-256-GCM in `encryptedAccessToken` and `encryptedRefreshToken`.
+2. **Live Official API Call & Property Synchronization**:
+   - Server invokes `https://www.googleapis.com/webmasters/v3/sites` via `safeGoogleFetch` with IPv4 routing.
+   - Google API responded with **HTTP 200 OK** and returned 4 verified Search Console properties:
+     * `sc-domain:indexmetrix.com` (Permission: `siteOwner`)
+     * `sc-domain:v1.indexmetrix.com` (Permission: `siteOwner`)
+     * `https://www.indexmetrix.com/` (Permission: `siteOwner`)
+     * `https://craftpeak.site/` (Permission: `siteUnverifiedUser`)
+   - Properties were upserted atomically into `prisma.searchConsoleProperty` in SQLite (`dev.db`).
+3. **Token Security Enforcement**:
+   - Both `/api/google/properties` and `/api/google/sync` use explicit Prisma `select` blocks to omit `encryptedAccessToken` and `encryptedRefreshToken` from API responses sent to the browser.
+4. **Customer Multi-Tenant Isolation**:
+   - Verified that `customer@indexmatrix.io` sees 0 accounts and 0 properties when querying `/api/google/properties`.
+   - Verified that attempting to trigger a sync on another user's Google account returns HTTP 404 (`"No connected Google account found for this user."`).
+
+---
+
+## 9. Production Stage: Real Google Search Console URL Inspection Verification
+
+### A. Architecture & Endpoints
+- **Official Google Endpoint**: `POST https://searchconsole.googleapis.com/v1/urlInspection/index:inspect`
+- **Application Endpoints**:
+  - `POST /api/urls/inspect` (Direct URL inspection with SSRF & tenant isolation)
+  - `POST /api/urls/[id]/inspect` (Existing URL record inspection)
+- **Scopes Used**:
+  - `https://www.googleapis.com/auth/webmasters.readonly`
+  - `https://www.googleapis.com/auth/indexing`
+  - `openid`, `email`, `profile`
+
+### B. Live Real-World Inspection Test
+- **Test URL**: `https://www.indexmetrix.com/`
+- **Matched Property**: `https://www.indexmetrix.com/` / `sc-domain:indexmetrix.com` (Permission: `siteOwner`)
+- **HTTP Status from Google**: **200 OK**
+- **Exact Live Google API Telemetry Returned**:
+  ```json
+  {
+    "inspectionResult": {
+      "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://www.indexmetrix.com/&id=k9q6sUcHUkSpQMqisGhruA&utm_medium=link&utm_source=api",
+      "indexStatusResult": {
+        "verdict": "NEUTRAL",
+        "coverageState": "Crawled - currently not indexed",
+        "robotsTxtState": "ALLOWED",
+        "indexingState": "INDEXING_STATE_UNSPECIFIED",
+        "pageFetchState": "SUCCESSFUL",
+        "crawledAs": "MOBILE",
+        "lastCrawlTime": "2026-10-03T00:50:18Z",
+        "referringUrls": [
+          "https://indexmetrix.com/"
+        ]
+      }
+    }
+  }
+  ```
+
+### C. Truthful Status Classification & Non-Fake Indexing
+- **Honest Indexing Status**: The system strictly recorded `NOT_INDEXED` based on Google's verdict `NEUTRAL` and coverage state `"Crawled - currently not indexed"`.
+- **Zero Simulation / Zero Fake Indexing**: Never reports "Indexed", "Submitted", or "Success" unless that status is explicitly confirmed in Google's telemetry payload.
+- **Clarification**: The UI and API clearly explain that URL Inspection reports Google's current evaluation state at the time of the last crawl; it does not trigger an immediate re-crawl.
+
+### D. Security & SSRF Protection Verification
+1. **Loopback & Localhost Rejection**:
+   - `http://localhost:3000/api/admin` -> Blocked with HTTP 403 (`SSRF_BLOCKED`).
+   - `http://127.0.0.1:8080/secret` -> Blocked with HTTP 403 (`SSRF_BLOCKED`).
+2. **Cloud Metadata Rejection**:
+   - `http://169.254.169.254/latest/meta-data/` -> Blocked with HTTP 403 (`SSRF_BLOCKED`).
+3. **Private Subnet Rejection**:
+   - `http://192.168.1.1/admin` -> Blocked with HTTP 403 (`SSRF_BLOCKED`).
+4. **Unauthorized Domain Rejection**:
+   - `https://example.com/unauthorized-page` -> Rejected with HTTP 400 (`PROPERTY_NOT_AUTHORIZED`), reporting the user's authorized properties without calling Google.
+
+### E. Tenant Isolation & Billing Verification
+1. **Tenant Isolation**:
+   - When `customer@indexmatrix.io` submitted `https://www.indexmetrix.com/`, the request was rejected with HTTP 400 (`NO_CONNECTED_ACCOUNT`) because the property belongs to another user.
+2. **Double-Entry Credit Ledger**:
+   - System Owner: 0 credits deducted (`creditMode: UNLIMITED`).
+   - Standard Customer: 2 credits deducted per inspection with idempotency key (`inspect_<id>_<timestamp>`).
+   - If Google API fails: credits are immediately refunded with type `REFUND`.
+
+### F. Database Persistence Verification (SQLite `dev.db`)
+1. **`GoogleInspection` Record**:
+   - `id`: `de1b7686-7187-4802-9bca-ba7e3f673f16`
+   - `urlId`: `2f3504ad-b413-4093-99f2-be1e67db1b01`
+   - `verdict`: `"NEUTRAL"`
+   - `coverageState`: `"Crawled - currently not indexed"`
+   - `robotsTxtState`: `"ALLOWED"`
+   - `pageFetchState`: `"SUCCESSFUL"`
+   - `crawledAs`: `"MOBILE"`
+   - `lastCrawlTime`: `2026-10-03T00:50:18Z`
+   - `rawResponse`: Full JSON stored verbatim.
+2. **`Url` Record**:
+   - `normalizedUrl`: `https://www.indexmetrix.com/`
+   - `status`: `NOT_INDEXED`
+   - `lastInspectedAt`: Persisted timestamp.
+3. **`UrlStatusHistory` Record**:
+   - `source`: `"GOOGLE_INSPECTION"`
+   - `reason`: `"GSC inspection verdict: NEUTRAL (Crawled - currently not indexed)"`
+
+### G. Test & Build Results
+- **Automated Vitest Suite**: 55/55 passed across 9 test files (Exit Code 0).
+- **TypeScript Typecheck**: Clean pass (`npx tsc --noEmit` exited code 0).
+- **Next.js 14 Production Build**: 66/66 routes successfully generated (Exit Code 0).
+
+### H. Limitations
+1. **Read-Only Telemetry**:
+   - Google URL Inspection API only reflects Googlebot's historical evaluation and crawl index. It does not submit an on-demand re-crawl or indexing trigger.
+2. **Quota Limits**:
+   - Google Search Console API imposes a standard daily limit of 2,000 URL inspection requests per day per project.
+3. **Domain Ownership Dependency**:
+   - An inspected URL must strictly fall under a verified Domain Property or URL-Prefix property authorized in the connected Google account.
+
+---
+
+## 10. Production Stage: Production-Safe Discovery Architecture & WebSub Configuration
+
+### A. Problem Statement & Architecture Objective
+Previously, `GoogleWebSubProvider` dispatched WebSub hub publication requests hardcoded to `hub.url=http://localhost:3000/api/feeds/rapid-rss.xml`. While functional in local development, publishing an unresolvable `localhost` URL to Google's public WebSub hub (`https://pubsubhubbub.appspot.com/`) in production would cause hub fetch rejections, invalid crawl requests, and corrupted feed syndication.
+
+To ensure production safety without breaking local developer workflows, configuration is now centralized with strict environment-aware validation.
+
+### B. Centralized Configuration Module (`src/lib/app-config.ts`)
+The application now exposes a single, strongly-typed configuration interface:
+- **`validateAppBaseUrl(baseUrl, isProduction)`**:
+  - In Development (`NODE_ENV !== 'production'`): Accepts `http://localhost:<port>`, `http://127.0.0.1:<port>`, or public URLs. Defaults to `http://localhost:3000` if unspecified.
+  - In Production (`NODE_ENV === 'production'`):
+    * Strictly requires `APP_BASE_URL` (or fallback `NEXT_PUBLIC_APP_URL`). Throws error if unset.
+    * Strictly requires `https://` protocol scheme. Rejects insecure `http://`.
+    * Strictly forbids loopback (`localhost`, `127.0.0.1`, `::1`), private IP subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and carrier-grade/link-local addresses (`169.254.0.0/16`, `100.64.0.0/10`).
+    * Strips trailing slashes to guarantee clean canonical path construction.
+- **Dynamic Helper Functions**:
+  - `getPublicFeedUrl()`: `${getAppBaseUrl()}/api/feeds/rapid-rss.xml`
+  - `getPublicSitemapUrl()`: `${getAppBaseUrl()}/api/feeds/rapid-sitemap.xml`
+  - `getRelayGatewayUrl(slug)`: `${getAppBaseUrl()}/relay/${slug}`
+
+### C. Refactored Application Components
+1. **`src/lib/discovery/providers/GoogleWebSubProvider.ts`**:
+   - Resolves feed URL via `getPublicFeedUrl()`.
+   - Wraps URL retrieval in safety blocks: if configuration fails in production, it safely catches the error and marks the provider result as `FAILED` (`errorCode: 'INVALID_APP_BASE_URL'`) without dispatching invalid requests over the public internet.
+   - Publishes `hub.mode=publish&hub.url=${encodeURIComponent(feedUrl)}` to `https://pubsubhubbub.appspot.com/`.
+2. **`src/app/api/feeds/rapid-rss.xml/route.ts`**:
+   - Dynamic `<link>` and `<atom:link rel="self" ...>` XML attributes generated from `getAppBaseUrl()` and `getPublicFeedUrl()`.
+   - Exposes zero internal secrets; returns valid `application/rss+xml`.
+3. **`src/lib/fast-indexer.ts`**:
+   - Dispatches ping notifications and constructs ping URLs using `getAppBaseUrl()`.
+4. **`src/app/api/urls/fast-index/route.ts` & `src/app/api/urls/[id]/submit/route.ts`**:
+   - Uses `getAppBaseUrl()` for crawl feed aggregation.
+
+### D. Automated Regression Test Suite (`tests/app-config.test.ts`)
+14 automated tests were added covering:
+- ✅ Development mode allows `http://localhost:3000` and custom local ports.
+- ✅ Production mode strictly requires `APP_BASE_URL` and rejects missing configurations.
+- ✅ Production mode rejects non-HTTPS schemes (e.g. `http://example.com`).
+- ✅ Production mode rejects `localhost`, `127.0.0.1`, and private IP ranges.
+- ✅ Dynamic generation of RSS and Sitemap URLs strips trailing slashes.
+- ✅ `GoogleWebSubProvider` generates payload with the configured public feed URL.
+- ✅ `GoogleWebSubProvider` fails safely on invalid base URL without sending network requests to Google WebSub hub.
+
+### E. Verification Summary
+- **Vitest Suite**: **119 / 119 PASSED** across all 14 test suites:
+  * `tests/app-config.test.ts` (14 passed)
+  * `tests/verified-discovery-layer.test.ts` (11 passed)
+  * `tests/commercial-indexing-engine.test.ts` (16 passed)
+  * `tests/commercial-indexing-service.test.ts` (15 passed)
+  * `tests/google-oauth.test.ts` (5 passed)
+  * `tests/live-integration.test.ts` (7 passed)
+  * `tests/url-pipeline-and-audit.test.ts` (6 passed)
+  * `tests/property-matcher.test.ts` (4 passed)
+  * `tests/url-persistence.test.ts` (5 passed)
+  * `tests/credit-ledger.test.ts` (7 passed)
+  * `tests/analyzer.test.ts` (6 passed)
+  * `tests/auth.test.ts` (7 passed)
+  * `tests/ssrf-protection.test.ts` (9 passed)
+  * `tests/sitemap-parser.test.ts` (7 passed)
+- **TypeScript**: Clean (`npx tsc --noEmit` exited code 0).
+- **Next.js 14 Production Build**: Clean (`npm run build` exited code 0, 68/68 static & dynamic routes).
+- **Live Smoke Test (Port 3000)**:
+  * `GET http://localhost:3000/api/feeds/rapid-rss.xml` returned HTTP 200 with `<atom:link rel="self" href="http://localhost:3000/api/feeds/rapid-rss.xml"/>`.
+  * `scripts/verify-e2e-live.ts` executed against live endpoints:
+    - Pre-flight analyzer executed.
+    - Double-entry credit deduction executed.
+    - Third-party forum URL submitted to WebSub hub (`https://pubsubhubbub.appspot.com/`, HTTP 204 ACCEPTED).
+    - Status transitioned truthfully: `SUBMITTED` -> `DISCOVERY_PENDING` / `DISCOVERY_SIGNAL_SENT`.
+    - Live Google Search Console URL inspection executed on owned property (`https://www.indexmetrix.com/`, HTTP 200 OK, coverage state `"Crawled - currently not indexed"`).
+    - Owner unlimited credits validated (0 credits deducted).
+
+
+
+

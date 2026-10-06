@@ -29,34 +29,58 @@ async function main() {
   console.log('--- SEEDING INDEX MATRIX DATABASE ---');
 
   // 1. Seed Owner Account
-  const ownerEmail = process.env.OWNER_EMAIL || 'owner@indexmatrix.io';
-  const ownerPass = process.env.OWNER_INITIAL_PASSWORD || 'ChangeMeImmediately123!';
+  const ownerEmail = process.env.OWNER_EMAIL || 'naina@indexmetrix.com';
+  const ownerPass = process.env.OWNER_INITIAL_PASSWORD || 'Naina@123';
   const ownerHash = await bcrypt.hash(ownerPass, 12);
 
-  const owner = await prisma.user.upsert({
-    where: { email: ownerEmail },
-    update: {
-      role: 'OWNER',
-      creditMode: 'UNLIMITED',
-      status: 'ACTIVE',
-    },
-    create: {
-      email: ownerEmail,
-      passwordHash: ownerHash,
-      name: 'System Owner',
-      role: 'OWNER',
-      creditMode: 'UNLIMITED',
-      status: 'ACTIVE',
-      wallet: {
-        create: {
-          balance: 0, // Ignored because creditMode == UNLIMITED
-          lifetimeUsed: 0,
-          lifetimePurchased: 0,
+  // Check if an existing primary OWNER already exists in database
+  const existingOwner = await prisma.user.findFirst({
+    where: { role: 'OWNER' },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  let owner;
+  if (existingOwner && existingOwner.email !== ownerEmail) {
+    console.log(`[i] Updating primary owner account from ${existingOwner.email} to ${ownerEmail}...`);
+    owner = await prisma.user.update({
+      where: { id: existingOwner.id },
+      data: {
+        email: ownerEmail,
+        passwordHash: ownerHash,
+        name: 'System Owner',
+        role: 'OWNER',
+        creditMode: 'UNLIMITED',
+        status: 'ACTIVE',
+      },
+      include: { wallet: true },
+    });
+  } else {
+    owner = await prisma.user.upsert({
+      where: { email: ownerEmail },
+      update: {
+        passwordHash: ownerHash,
+        role: 'OWNER',
+        creditMode: 'UNLIMITED',
+        status: 'ACTIVE',
+      },
+      create: {
+        email: ownerEmail,
+        passwordHash: ownerHash,
+        name: 'System Owner',
+        role: 'OWNER',
+        creditMode: 'UNLIMITED',
+        status: 'ACTIVE',
+        wallet: {
+          create: {
+            balance: 0, // Ignored because creditMode == UNLIMITED
+            lifetimeUsed: 0,
+            lifetimePurchased: 0,
+          },
         },
       },
-    },
-    include: { wallet: true },
-  });
+      include: { wallet: true },
+    });
+  }
 
   console.log(`[+] Owner account configured: ${owner.email} (creditMode: ${owner.creditMode})`);
 
@@ -89,11 +113,12 @@ async function main() {
   console.log(`[+] Demo Customer created: ${customer.email} (balance: ${customer.wallet?.balance} credits)`);
 
   // 3. Create Sample Project for Customer
+  const DEMO_PROJECT_UUID = '4a2e5d91-7f83-4c6e-8d2b-1a9f0e3c5b78';
   const project = await prisma.project.upsert({
-    where: { id: 'demo-project-1' },
+    where: { id: DEMO_PROJECT_UUID },
     update: {},
     create: {
-      id: 'demo-project-1',
+      id: DEMO_PROJECT_UUID,
       userId: customer.id,
       name: 'Example Commerce Blog',
       domain: 'example.com',

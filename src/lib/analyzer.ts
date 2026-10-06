@@ -29,24 +29,36 @@ export interface RedirectHop {
 
 export interface AnalysisResult {
   url: string;
+  finalUrl: string;
   normalizedUrl: string;
   httpStatus: number;
   responseTimeMs: number;
   contentType: string;
   documentType: 'HTML_PAGE' | 'PDF_DOCUMENT' | 'UNSUPPORTED_BINARY';
   isThirdPartyHosted: boolean;
+  reachable: boolean;
+  robotsAllowed: boolean;
+  noindex: boolean;
+  canonical: string | null;
+  canonicalMatches: boolean;
+  title: string | null;
+  wordCount: number;
+  hasSitemap: boolean;
+  sitemapUrls: string[];
+  redirectChain: RedirectHop[];
+  crawlable: boolean;
+  discoveryEligible: boolean;
+  warnings: string[];
   pdfDetails?: {
     isPdfSignatureValid: boolean;
     pdfVersion?: string;
     byteSize: number;
   };
-  title: string | null;
   metaDescription: string | null;
   robotsMeta: string | null;
   xRobotsTag: string | null;
   canonicalUrl: string | null;
   robotsTxtStatus: 'ALLOWED' | 'DISALLOWED' | 'NOT_FOUND' | 'ERROR';
-  redirectChain: RedirectHop[];
   issues: AuditIssue[];
   passedAudit: boolean;
   hasStructuredJob: boolean;
@@ -102,19 +114,31 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
   if (!initialSsrf.isSafe) {
     return {
       url: targetUrl,
+      finalUrl: targetUrl,
       normalizedUrl: targetUrl,
       httpStatus: 0,
       responseTimeMs: Date.now() - startTime,
       contentType: 'none',
       documentType: 'UNSUPPORTED_BINARY',
       isThirdPartyHosted: false,
+      reachable: false,
+      robotsAllowed: false,
+      noindex: false,
+      canonical: null,
+      canonicalMatches: true,
       title: null,
+      wordCount: 0,
+      hasSitemap: false,
+      sitemapUrls: [],
       metaDescription: null,
       robotsMeta: null,
       xRobotsTag: null,
       canonicalUrl: null,
       robotsTxtStatus: 'ERROR',
       redirectChain: [],
+      crawlable: false,
+      discoveryEligible: false,
+      warnings: [initialSsrf.reason || 'Target URL rejected by SSRF firewall.'],
       issues: [
         {
           issue: 'INVALID_URL',
@@ -363,9 +387,12 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       explanation: `Resource served with Content-Type "${contentType}" rather than standard HTML or PDF.`,
       recommendedFix: 'Ensure web pages serve standard text/html or application/pdf content-type.',
     });
-  } else if (responseBody) {
-    // Standard HTML Document Parsing
-    documentType = 'HTML_PAGE';
+  }
+
+  let wordCount = 0;
+  const sitemapUrls: string[] = [];
+
+  if (documentType === 'HTML_PAGE' && responseBody) {
     try {
       const $ = cheerio.load(responseBody);
 
@@ -373,6 +400,9 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       metaDescription = $('meta[name="description" i]').attr('content')?.trim() || null;
       robotsMeta = $('meta[name="robots" i]').attr('content')?.trim() || null;
       canonicalUrl = $('link[rel="canonical" i]').attr('href')?.trim() || null;
+
+      const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+      wordCount = bodyText ? bodyText.split(' ').filter(Boolean).length : 0;
 
       // Meta robots validation
       if (robotsMeta && /noindex/i.test(robotsMeta)) {
@@ -429,7 +459,7 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
     }
   }
 
-  // 5. Test robots.txt accessibility
+  // 5. Test robots.txt accessibility & sitemap declaration
   let robotsTxtStatus: 'ALLOWED' | 'DISALLOWED' | 'NOT_FOUND' | 'ERROR' = 'ALLOWED';
   try {
     const urlObj = new URL(currentUrl);
@@ -453,6 +483,14 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
             recommendedFix: 'Update /robots.txt to allow search crawlers (Googlebot, etc.) to access indexable pages.',
           });
         }
+
+        // Parse Sitemap declarations from robots.txt
+        const smMatches = text.matchAll(/Sitemap:\s*(https?:\/\/[^\s\r\n]+)/gi);
+        for (const sm of smMatches) {
+          if (sm[1] && !sitemapUrls.includes(sm[1].trim())) {
+            sitemapUrls.push(sm[1].trim());
+          }
+        }
       } else if (robotsRes && robotsRes.status === 404) {
         robotsTxtStatus = 'NOT_FOUND';
       }
@@ -463,22 +501,55 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
 
   const passedAudit = issues.filter((i) => i.severity === 'CRITICAL').length === 0 && httpStatus === 200;
 
+  const reachable = httpStatus > 0 && httpStatus < 500;
+  const robotsAllowed = robotsTxtStatus !== 'DISALLOWED';
+  const noindex = Boolean((robotsMeta && /noindex/i.test(robotsMeta)) || (xRobotsTag && /noindex/i.test(xRobotsTag)));
+
+  let canonicalMatches = true;
+  if (canonicalUrl) {
+    try {
+      const cParsed = new URL(canonicalUrl, currentUrl);
+      const curParsed = new URL(currentUrl);
+      canonicalMatches =
+        cParsed.origin === curParsed.origin &&
+        cParsed.pathname.replace(/\/$/, '') === curParsed.pathname.replace(/\/$/, '');
+    } catch {
+      canonicalMatches = false;
+    }
+  }
+
+  const crawlable = reachable && robotsAllowed && httpStatus < 400;
+  const discoveryEligible = crawlable && !noindex && httpStatus === 200;
+  const warnings = issues.map((i) => i.explanation);
+
   return {
     url: targetUrl,
+    finalUrl: currentUrl,
     normalizedUrl: currentUrl,
     httpStatus,
     responseTimeMs,
     contentType,
     documentType,
     isThirdPartyHosted: thirdParty.isThirdParty,
-    pdfDetails,
+    reachable,
+    robotsAllowed,
+    noindex,
+    canonical: canonicalUrl,
+    canonicalMatches,
     title,
+    wordCount,
+    hasSitemap: sitemapUrls.length > 0,
+    sitemapUrls,
+    redirectChain,
+    crawlable,
+    discoveryEligible,
+    warnings,
+    pdfDetails,
     metaDescription,
     robotsMeta,
     xRobotsTag,
     canonicalUrl,
     robotsTxtStatus,
-    redirectChain,
     issues,
     passedAudit,
     hasStructuredJob,

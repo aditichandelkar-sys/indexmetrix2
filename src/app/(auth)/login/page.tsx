@@ -1,12 +1,15 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Layers, ArrowRight, Lock, Mail, AlertCircle, RefreshCw } from 'lucide-react';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnUrl = searchParams.get('returnUrl') || '/dashboard';
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -31,21 +34,11 @@ export default function LoginPage() {
         return;
       }
 
-      router.push('/dashboard');
+      router.push(returnUrl);
       router.refresh();
     } catch {
       setError('An unexpected error occurred. Please try again.');
       setLoading(false);
-    }
-  };
-
-  const handleFillDemo = (type: 'owner' | 'customer') => {
-    if (type === 'owner') {
-      setEmail('owner@indexmatrix.io');
-      setPassword('ChangeMeImmediately123!');
-    } else {
-      setEmail('customer@indexmatrix.io');
-      setPassword('Customer123!');
     }
   };
 
@@ -64,29 +57,6 @@ export default function LoginPage() {
           </Link>
           <h2 className="text-2xl font-bold text-white tracking-tight">Sign in to your account</h2>
           <p className="text-xs text-slate-400 mt-1">Access your projects, URLs, and Search Console intelligence</p>
-        </div>
-
-        {/* Demo Fast Login Pills */}
-        <div className="mb-6 p-3 rounded-xl bg-surface-200/50 border border-white/5 text-xs text-slate-400 flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-slate-300">Quick Test Credentials:</span>
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => handleFillDemo('owner')}
-              className="flex-1 py-1.5 px-2 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/20 text-[11px] font-medium transition-all"
-            >
-              Fill Owner (Unlimited)
-            </button>
-            <button
-              type="button"
-              onClick={() => handleFillDemo('customer')}
-              className="flex-1 py-1.5 px-2 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/20 text-[11px] font-medium transition-all"
-            >
-              Fill Customer (150 cr)
-            </button>
-          </div>
         </div>
 
         {/* Login Form */}
@@ -157,5 +127,13 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#070b14] flex items-center justify-center text-xs text-slate-400">Loading sign in...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

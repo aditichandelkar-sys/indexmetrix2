@@ -3,10 +3,20 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
 import { normalizeUrl, findBestMatchingProperty } from '@/lib/property-matcher';
+import { validateUrlForSSRF } from '@/lib/ssrf';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const addUrlSchema = z.object({
-  projectId: z.string().uuid('Invalid project ID'),
-  url: z.string().min(4, 'URL is required').trim(),
+  projectId: z
+    .string({
+      required_error: 'Please select a project before submitting a URL.',
+      invalid_type_error: 'Please select a project before submitting a URL.',
+    })
+    .trim()
+    .min(1, 'Please select a project before submitting a URL.')
+    .regex(UUID_REGEX, 'Invalid project ID. Must be a valid UUID.'),
+  url: z.string({ required_error: 'URL is required' }).min(4, 'URL is required').trim(),
 });
 
 export async function GET(req: NextRequest) {
@@ -101,6 +111,16 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json();
+
+    // Safe diagnostic logging (strictly no tokens, keys, passwords, or secrets)
+    console.log('[Safe Diagnostic] POST /api/urls:', {
+      projectIdExists: body?.projectId !== undefined && body?.projectId !== null && body?.projectId !== '',
+      projectIdType: typeof body?.projectId,
+      projectIdFormatValidUUID: typeof body?.projectId === 'string' && UUID_REGEX.test(body.projectId),
+      submittedUrlType: typeof body?.url,
+      authenticatedUserExists: !!user,
+    });
+
     const parsed = addUrlSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: parsed.error.errors[0].message }, { status: 400 });
@@ -120,7 +140,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (!project) {
-      return NextResponse.json({ success: false, error: 'Project not found' }, { status: 404 });
+      return NextResponse.json({ success: false, error: 'Project not found or unauthorized' }, { status: 404 });
     }
 
     const { url: parsedUrl, error } = normalizeUrl(rawUrl);
@@ -128,7 +148,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: `Invalid URL: ${error}` }, { status: 400 });
     }
 
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return NextResponse.json({ success: false, error: 'Only HTTP and HTTPS protocols are supported.' }, { status: 400 });
+    }
+
     const normalizedUrl = parsedUrl.toString();
+
+    // SSRF Protection
+    const ssrfCheck = await validateUrlForSSRF(normalizedUrl);
+    if (!ssrfCheck.isSafe) {
+      return NextResponse.json(
+        { success: false, error: `URL security policy violation: ${ssrfCheck.reason}` },
+        { status: 403 }
+      );
+    }
+
     const hostname = parsedUrl.hostname;
     const path = parsedUrl.pathname + parsedUrl.search;
 

@@ -14,10 +14,26 @@ export async function GET() {
     if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
     const accounts = await prisma.googleAccount.findMany({
-      where: user.role === 'OWNER' ? {} : { userId: user.id },
-      include: {
+      where: { userId: user.id },
+      select: {
+        id: true,
+        userId: true,
+        email: true,
+        status: true,
+        scopes: true,
+        tokenExpiresAt: true,
+        createdAt: true,
+        updatedAt: true,
         properties: {
-          include: {
+          select: {
+            id: true,
+            googleAccountId: true,
+            projectId: true,
+            propertyUrl: true,
+            permissionLevel: true,
+            isVerified: true,
+            createdAt: true,
+            updatedAt: true,
             project: { select: { id: true, name: true, domain: true } },
           },
         },
@@ -47,7 +63,7 @@ export async function POST(req: NextRequest) {
     const property = await prisma.searchConsoleProperty.findFirst({
       where: {
         id: propertyId,
-        googleAccount: user.role === 'OWNER' ? {} : { userId: user.id },
+        googleAccount: { userId: user.id },
       },
     });
 
@@ -60,7 +76,7 @@ export async function POST(req: NextRequest) {
       const project = await prisma.project.findFirst({
         where: {
           id: projectId,
-          ...(user.role === 'OWNER' ? {} : { userId: user.id }),
+          userId: user.id,
         },
       });
       if (!project) {

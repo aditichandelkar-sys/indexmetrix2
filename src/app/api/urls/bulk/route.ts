@@ -4,8 +4,17 @@ import { prisma } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
 import { normalizeUrl, findBestMatchingProperty } from '@/lib/property-matcher';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const bulkSchema = z.object({
-  projectId: z.string().uuid('Invalid project ID'),
+  projectId: z
+    .string({
+      required_error: 'Please select a project before adding URLs.',
+      invalid_type_error: 'Please select a project before adding URLs.',
+    })
+    .trim()
+    .min(1, 'Please select a project before adding URLs.')
+    .regex(UUID_REGEX, 'Invalid project ID. Must be a valid UUID.'),
   rawContent: z.string().min(1, 'No content provided'),
   sourceType: z.enum(['RAW_TEXT', 'CSV', 'XML_SITEMAP', 'RSS']).default('RAW_TEXT'),
 });

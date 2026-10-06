@@ -44,7 +44,7 @@ export default function HomePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: quickUrl,
-          projectId: 'demo-project-1',
+          projectId: '4a2e5d91-7f83-4c6e-8d2b-1a9f0e3c5b78',
           autoAnalyze: true,
         }),
       });

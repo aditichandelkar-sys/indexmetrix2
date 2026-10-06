@@ -17,48 +17,55 @@ import {
   ExternalLink,
   RefreshCw,
   Plus,
+  Clock,
+  Sparkles,
+  Bot,
 } from 'lucide-react';
 
 export default function DashboardOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState({
     totalUrls: 0,
-    analyzedUrls: 0,
-    submittedUrls: 0,
     indexedUrls: 0,
     notIndexed: 0,
+    pendingUrls: 0,
+    processingUrls: 0,
     blockedUrls: 0,
     errorUrls: 0,
     remainingCredits: '...',
     googleConnections: 0,
     activeJobs: 0,
+    completedJobs: 0,
   });
   const [recentUrls, setRecentUrls] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
+  const [recentJobs, setRecentJobs] = useState<any[]>([]);
 
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      const [urlsRes, credRes, projRes, googleRes] = await Promise.all([
+      const [urlsRes, credRes, projRes, googleRes, jobsRes] = await Promise.all([
         fetch('/api/urls?limit=10'),
         fetch('/api/credits/balance'),
         fetch('/api/projects'),
         fetch('/api/google/properties'),
+        fetch('/api/jobs?limit=5'),
       ]);
 
       const urlsData = await urlsRes.json();
       const credData = await credRes.json();
       const projData = await projRes.json();
       const googleData = await googleRes.json();
+      const jobsData = await jobsRes.json();
 
       const urls = urlsData.urls || [];
       const total = urlsData.pagination?.total || urls.length;
       const stats = urlsData.stats || {};
 
-      const analyzed = stats.ANALYZED || 0;
-      const submitted = stats.SUBMITTED || 0;
       const indexed = stats.INDEXED || 0;
       const notIndexed = stats.NOT_INDEXED || 0;
+      const pending = (stats.DISCOVERY_PENDING || 0) + (stats.UNINSPECTED || 0) + (stats.IMPORTED || 0) + (stats.ANALYZED || 0);
+      const processing = stats.PROCESSING || 0;
       const blocked = stats.BLOCKED || 0;
       const errors = stats.ERROR || 0;
 
@@ -67,21 +74,34 @@ export default function DashboardOverviewPage() {
         connCount = googleData.accounts.length;
       }
 
+      let activeJobsCount = 0;
+      let completedJobsCount = 0;
+      const jobsList = jobsData.jobs || [];
+      for (const j of jobsList) {
+        if (j.status === 'QUEUED' || j.status === 'PROCESSING') {
+          activeJobsCount++;
+        } else if (j.status === 'COMPLETED' || j.status === 'PARTIAL') {
+          completedJobsCount++;
+        }
+      }
+
       setMetrics({
         totalUrls: total,
-        analyzedUrls: analyzed,
-        submittedUrls: submitted,
         indexedUrls: indexed,
         notIndexed,
+        pendingUrls: pending,
+        processingUrls: processing,
         blockedUrls: blocked,
         errorUrls: errors,
         remainingCredits: credData.creditMode === 'UNLIMITED' ? 'UNLIMITED' : credData.balance?.toLocaleString() || '0',
         googleConnections: connCount,
-        activeJobs: 0,
+        activeJobs: activeJobsCount,
+        completedJobs: completedJobsCount,
       });
 
       setRecentUrls(urls);
       setProjects(projData.projects || []);
+      setRecentJobs(jobsList);
     } catch (e) {
       console.error('Failed to load dashboard metrics', e);
     } finally {
@@ -95,11 +115,11 @@ export default function DashboardOverviewPage() {
 
   const cards = [
     { title: 'Total URLs', value: metrics.totalUrls, icon: Globe, color: 'text-brand-400' },
-    { title: 'Analyzed', value: metrics.analyzedUrls, icon: Zap, color: 'text-cyan-400' },
     { title: 'Indexed (GSC)', value: metrics.indexedUrls, icon: CheckCircle2, color: 'text-emerald-400' },
     { title: 'Not Indexed', value: metrics.notIndexed, icon: AlertTriangle, color: 'text-amber-400' },
+    { title: 'Discovery Pending', value: metrics.pendingUrls, icon: Clock, color: 'text-cyan-400' },
     { title: 'Blocked', value: metrics.blockedUrls, icon: ShieldCheck, color: 'text-rose-400' },
-    { title: 'Submitted', value: metrics.submittedUrls, icon: Activity, color: 'text-indigo-400' },
+    { title: 'Active Jobs', value: metrics.activeJobs, icon: Activity, color: 'text-purple-400' },
     { title: 'Remaining Credits', value: metrics.remainingCredits, icon: Coins, color: 'text-amber-300' },
     { title: 'GSC Accounts', value: metrics.googleConnections, icon: Search, color: 'text-cyan-300' },
   ];
@@ -107,8 +127,8 @@ export default function DashboardOverviewPage() {
   return (
     <div className="flex-1 flex flex-col">
       <DashboardHeader
-        title="SEO Workspace Overview"
-        description="Real-time URL health metrics, Search Console sync status, and indexing telemetry"
+        title="URL Indexing & Discovery Command Center"
+        description="Real-time URL health metrics, Google Search Console sync status, and indexing job telemetry"
       >
         <button
           onClick={fetchDashboardData}
@@ -143,7 +163,7 @@ export default function DashboardOverviewPage() {
               <span>Project Workspaces</span>
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Organize URLs by domain, match Search Console properties, and manage automated sitemap imports.
+              Organize URLs by domain, link Search Console properties, and manage automated sitemap imports.
             </p>
             <div className="space-y-2">
               {projects.slice(0, 3).map((p) => (
@@ -176,71 +196,75 @@ export default function DashboardOverviewPage() {
               <span>Google Search Console Integration</span>
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Link properties via OAuth 2.0 to inspect URLs directly via the official Google URL Inspection API.
+              Authorized via OAuth 2.0 to inspect URLs directly via the official Google URL Inspection API.
             </p>
             <div className="p-3.5 rounded-xl bg-[#090e1a] border border-white/5 space-y-2 text-xs">
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Connection Health:</span>
                 <span className="text-emerald-400 font-mono font-semibold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Active
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Live & Verified
                 </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Inspection API Quota:</span>
                 <span className="text-slate-300 font-mono">2,000 / day</span>
               </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Verified Properties:</span>
+                <span className="text-slate-300 font-mono">{projects.filter((p) => p.googlePropertyUrl).length} Linked</span>
+              </div>
             </div>
             <Link
               href="/google"
               className="inline-flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 font-semibold"
             >
-              <span>View Search Console Properties</span>
+              <span>Manage Google Connections</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
 
-          {/* Credit Ledger Summary */}
+          {/* Active Job Telemetry */}
           <div className="glass-panel p-6 rounded-2xl border border-white/5 space-y-4">
             <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Coins className="w-4 h-4 text-amber-400" />
-              <span>Credit Ledger & Ledger</span>
+              <Activity className="w-4 h-4 text-purple-400" />
+              <span>Commercial Job Telemetry</span>
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Every operation is recorded in an immutable audit ledger. No hidden recurring fees or artificial balances.
+              Batch queue worker status for URL analysis, robots checking, and official Google inspection.
             </p>
-            <div className="p-3.5 rounded-xl bg-[#090e1a] border border-white/5 space-y-2 text-xs font-mono">
-              <div className="flex justify-between text-slate-400">
-                <span>URL Analysis:</span> <span className="text-white">1 Credit</span>
+            <div className="p-3.5 rounded-xl bg-[#090e1a] border border-white/5 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Active Jobs:</span>
+                <span className="text-purple-400 font-mono font-semibold">{metrics.activeJobs}</span>
               </div>
-              <div className="flex justify-between text-slate-400">
-                <span>Google Inspection:</span> <span className="text-white">2 Credits</span>
-              </div>
-              <div className="flex justify-between text-slate-400">
-                <span>Sitemap Parse:</span> <span className="text-white">5 Credits</span>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Completed Jobs:</span>
+                <span className="text-emerald-400 font-mono font-semibold">{metrics.completedJobs}</span>
               </div>
             </div>
             <Link
-              href="/credits"
-              className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 font-semibold"
+              href="/jobs"
+              className="inline-flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-300 font-semibold"
             >
-              <span>View Transaction History</span>
+              <span>Open Jobs Center</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
         </div>
 
-        {/* Live URL Table Section */}
+        {/* Recent URL Registry */}
         <div className="glass-panel rounded-2xl border border-white/5 overflow-hidden">
           <div className="p-5 border-b border-white/5 flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-bold text-white">Recent URLs in Workspace</h3>
-              <p className="text-xs text-slate-400">Latest analyzed, inspected, and queued pages</p>
-            </div>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+              <Globe className="w-4 h-4 text-brand-400" />
+              <span>Recent URL Statuses</span>
+            </h3>
             <Link
               href="/urls"
               className="text-xs text-brand-400 hover:text-brand-300 font-semibold flex items-center gap-1"
             >
-              View Full Table <ArrowRight className="w-3.5 h-3.5" />
+              <span>View All URLs</span>
+              <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
 
@@ -249,53 +273,46 @@ export default function DashboardOverviewPage() {
               <thead className="bg-[#090e1a] text-slate-400 font-mono uppercase text-[10px] border-b border-white/5">
                 <tr>
                   <th className="px-5 py-3">URL</th>
-                  <th className="px-5 py-3">Project</th>
-                  <th className="px-5 py-3">Status</th>
-                  <th className="px-5 py-3">HTTP</th>
-                  <th className="px-5 py-3">Last Checked</th>
-                  <th className="px-5 py-3 text-right">Action</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Google Verdict</th>
+                  <th className="px-4 py-3">Last Inspected</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 text-slate-300">
                 {recentUrls.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-5 py-8 text-center text-slate-500">
-                      No URLs found in this workspace. Click &apos;Import URLs&apos; to get started.
+                    <td colSpan={4} className="px-5 py-8 text-center text-slate-500">
+                      No URLs in the registry yet.
                     </td>
                   </tr>
                 ) : (
                   recentUrls.map((u) => (
-                    <tr key={u.id} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="px-5 py-3.5 font-medium text-white max-w-xs truncate">
-                        <span title={u.normalizedUrl}>{u.normalizedUrl}</span>
+                    <tr key={u.id} className="hover:bg-white/[0.02]">
+                      <td className="px-5 py-3 font-mono text-xs max-w-sm truncate text-white">
+                        <Link href={`/urls?id=${u.id}`} className="hover:text-brand-400">
+                          {u.normalizedUrl}
+                        </Link>
                       </td>
-                      <td className="px-5 py-3.5 text-slate-400">{u.project?.name || 'Default'}</td>
-                      <td className="px-5 py-3.5">
+                      <td className="px-4 py-3">
                         <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
                             u.status === 'INDEXED'
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                              : u.status === 'BLOCKED' || u.status === 'ERROR'
-                              ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                              : u.status === 'ANALYZED'
-                              ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                              : 'bg-white/5 text-slate-400 border border-white/10'
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : u.status === 'NOT_INDEXED'
+                              ? 'bg-amber-500/10 text-amber-400'
+                              : u.status === 'DISCOVERY_PENDING'
+                              ? 'bg-cyan-500/10 text-cyan-400'
+                              : 'bg-slate-500/10 text-slate-400'
                           }`}
                         >
                           {u.status}
                         </span>
                       </td>
-                      <td className="px-5 py-3.5 font-mono text-slate-300">{u.httpStatus || '—'}</td>
-                      <td className="px-5 py-3.5 text-slate-400 text-[11px]">
-                        {u.lastAnalyzedAt ? new Date(u.lastAnalyzedAt).toLocaleDateString() : 'Never'}
+                      <td className="px-4 py-3 font-mono text-[11px]">
+                        {u.lastGoogleVerdict || u.inspections?.[0]?.verdict || 'Uninspected'}
                       </td>
-                      <td className="px-5 py-3.5 text-right">
-                        <Link
-                          href={`/urls?id=${u.id}`}
-                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-brand-300 hover:text-white font-medium text-[11px] transition-colors"
-                        >
-                          Details
-                        </Link>
+                      <td className="px-4 py-3 text-slate-400 text-[11px]">
+                        {u.lastInspectedAt ? new Date(u.lastInspectedAt).toLocaleDateString() : 'Never'}
                       </td>
                     </tr>
                   ))
