@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
-import { inspectUrlWithGoogle } from '@/lib/google-client';
+import { inspectUrlWithGoogle, normalizeGoogleVerdictToStatus } from '@/lib/google-client';
 import { findBestMatchingProperty } from '@/lib/property-matcher';
 import { deductCredits } from '@/lib/credit-ledger';
 
@@ -130,22 +130,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       },
     });
 
-    let newStatus = 'NOT_INDEXED';
+    const newStatus = normalizeGoogleVerdictToStatus(ir.verdict, ir.coverageState);
     let discoveryStatus = 'DISCOVERY_PENDING';
 
-    if (ir.verdict === 'PASS' || (ir.coverageState && ir.coverageState.toLowerCase().includes('indexed'))) {
-      newStatus = 'INDEXED';
+    if (newStatus === 'INDEXED') {
       discoveryStatus = 'INDEXED_CONFIRMED';
     } else if (
       ir.verdict === 'FAIL' ||
       (ir.robotsTxtState && ir.robotsTxtState !== 'ALLOWED') ||
       (ir.indexingState && ir.indexingState.includes('BLOCKED'))
     ) {
-      newStatus = 'BLOCKED';
       discoveryStatus = 'BLOCKED';
     } else {
-      newStatus = 'NOT_INDEXED';
-      discoveryStatus = 'DISCOVERY_PENDING';
+      discoveryStatus = 'GSC_INSPECTED_NOT_INDEXED';
     }
 
     const updated = await prisma.url.update({

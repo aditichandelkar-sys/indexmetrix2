@@ -196,8 +196,8 @@ function UrlsManagerContent() {
       } else {
         setInspectionModalData({
           url: inputUrl.trim(),
-          result: data.inspectionResult,
-          inspectionResultLink: data.inspectionResultLink,
+          result: data.inspectionResult || data.inspection,
+          inspectionResultLink: data.inspectionResultLink || data.inspection?.inspectionResultLink,
           property: data.matchedProperty,
           urlRecord: data.url,
         });
@@ -254,12 +254,12 @@ function UrlsManagerContent() {
       if (data.submissionType === 'THIRD_PARTY_DISCOVERY') {
         setActionMessage({
           type: 'success',
-          text: `Submitted for Discovery! Automated technical audit and discovery signals job enqueued in Jobs Center (#${data.job?.id?.slice(0, 8)}).`,
+          text: `Discovery Submission completed! Automated technical audit and discovery signals enqueued in Jobs Center (#${data.job?.id?.slice(0, 8)}).`,
         });
       } else {
         setActionMessage({
           type: 'success',
-          text: `Submitted for Indexing! Search Console inspection and discovery job enqueued in Jobs Center (#${data.job?.id?.slice(0, 8)}).`,
+          text: `Discovery Submission completed! Technical audit and discovery signals enqueued in Jobs Center (#${data.job?.id?.slice(0, 8)}). Click 'GSC Inspect' for live Google telemetry.`,
         });
       }
       loadUrls();
@@ -547,9 +547,10 @@ function UrlsManagerContent() {
                   type="submit"
                   disabled={isSubmittingIndexing || !inputUrl.trim()}
                   className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-md shadow-brand-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Non-GSC external discovery signals and crawlability audit"
                 >
                   <Zap className={`w-3.5 h-3.5 ${isSubmittingIndexing ? 'animate-spin' : ''}`} />
-                  <span>{isSubmittingIndexing ? 'Submitting...' : 'Submit for Indexing'}</span>
+                  <span>{isSubmittingIndexing ? 'Submitting...' : 'Discovery Submission'}</span>
                 </button>
 
                 <button
@@ -582,9 +583,13 @@ function UrlsManagerContent() {
                   <span>{isDirectInspecting ? 'Inspecting...' : 'GSC Inspect'}</span>
                 </button>
 
-                {isThirdPartyProject && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-mono text-[10px]">
-                    3rd-Party Discovery Mode
+                {isThirdPartyProject ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-mono text-[10px]" title="Third-party URLs use non-GSC discovery pipeline">
+                    3rd-Party Discovery Mode (GSC Inspect Disabled)
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-mono text-[10px]" title="Owned properties support official Google Search Console URL inspection">
+                    Owned Property Mode (GSC Inspect Available)
                   </span>
                 )}
               </div>

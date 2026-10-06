@@ -90,6 +90,24 @@ export async function POST(req: NextRequest) {
       include: { project: true },
     });
 
+    if (projectId) {
+      await prisma.project.update({
+        where: { id: projectId },
+        data: {
+          googlePropertyId: property.id,
+          googlePropertyUrl: property.propertyUrl,
+        },
+      });
+    } else if (property.projectId) {
+      await prisma.project.updateMany({
+        where: { id: property.projectId, googlePropertyId: property.id },
+        data: {
+          googlePropertyId: null,
+          googlePropertyUrl: null,
+        },
+      });
+    }
+
     return NextResponse.json({ success: true, property: updated });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

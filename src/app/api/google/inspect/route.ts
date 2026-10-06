@@ -6,6 +6,7 @@ import { validateUrlForSSRF } from '@/lib/ssrf';
 import { normalizeUrl, findBestMatchingProperty } from '@/lib/property-matcher';
 import { deductCredits, addCredits, CREDIT_COSTS } from '@/lib/credit-ledger';
 import { inspectUrlWithGoogle, sanitizeGoogleError, normalizeGoogleVerdictToStatus } from '@/lib/google-client';
+import { isThirdPartyProject } from '@/lib/project-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,6 +67,19 @@ export async function POST(req: NextRequest) {
 
       if (!project) {
         return NextResponse.json({ success: false, error: 'Project not found or unauthorized' }, { status: 404 });
+      }
+
+      if (isThirdPartyProject(project)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: 'PROPERTY_NOT_AUTHORIZED',
+              message: 'Third-party projects cannot be inspected via Google Search Console. Google URL Inspection is only available for verified owned properties.',
+            },
+          },
+          { status: 400 }
+        );
       }
 
       // 3. Normalize URL and validate syntax
@@ -138,15 +152,28 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      const match = findBestMatchingProperty(urlRecord.normalizedUrl, userProperties);
-      if (match.property) {
-        matchedProperty = userProperties.find((p) => p.id === match.property!.id) || null;
-        if (matchedProperty) {
-          await prisma.url.update({
-            where: { id: urlRecord.id },
-            data: { matchedPropertyId: matchedProperty.id },
-          });
+      // Check project linked property first if available
+      const projectLinkedProp = userProperties.find(
+        (p) =>
+          (project?.googlePropertyId && p.id === project.googlePropertyId) ||
+          (project?.googlePropertyUrl && p.propertyUrl === project.googlePropertyUrl) ||
+          (p.projectId === project?.id)
+      );
+
+      if (projectLinkedProp && findBestMatchingProperty(urlRecord.normalizedUrl, [projectLinkedProp]).property) {
+        matchedProperty = projectLinkedProp;
+      } else {
+        const match = findBestMatchingProperty(urlRecord.normalizedUrl, userProperties);
+        if (match.property) {
+          matchedProperty = userProperties.find((p) => p.id === match.property!.id) || null;
         }
+      }
+
+      if (matchedProperty) {
+        await prisma.url.update({
+          where: { id: urlRecord.id },
+          data: { matchedPropertyId: matchedProperty.id },
+        });
       }
     }
 
@@ -267,27 +294,31 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const inspectionData = {
+      id: savedInspection.id,
+      urlId: urlRecord.id,
+      targetUrl: urlRecord.normalizedUrl,
+      siteUrl,
+      verdict: ir.verdict,
+      coverageState: ir.coverageState || null,
+      indexingState: ir.indexingState || null,
+      robotsTxtState: ir.robotsTxtState || null,
+      pageFetchState: ir.pageFetchState || null,
+      googleCanonical: ir.googleCanonical || null,
+      userCanonical: ir.userCanonical || null,
+      crawledAs: ir.crawledAs || null,
+      lastCrawlTime: ir.lastCrawlTime || null,
+      referringUrls: ir.referringUrls || [],
+      inspectionResultLink: inspection.inspectionResultLink || null,
+      inspectedAt: savedInspection.inspectedAt,
+    };
+
     // 14. Return normalized JSON
     return NextResponse.json({
       success: true,
-      inspection: {
-        id: savedInspection.id,
-        urlId: urlRecord.id,
-        targetUrl: urlRecord.normalizedUrl,
-        siteUrl,
-        verdict: ir.verdict,
-        coverageState: ir.coverageState || null,
-        indexingState: ir.indexingState || null,
-        robotsTxtState: ir.robotsTxtState || null,
-        pageFetchState: ir.pageFetchState || null,
-        googleCanonical: ir.googleCanonical || null,
-        userCanonical: ir.userCanonical || null,
-        crawledAs: ir.crawledAs || null,
-        lastCrawlTime: ir.lastCrawlTime || null,
-        referringUrls: ir.referringUrls || [],
-        inspectionResultLink: inspection.inspectionResultLink || null,
-        inspectedAt: savedInspection.inspectedAt,
-      },
+      inspection: inspectionData,
+      inspectionResult: inspectionData,
+      inspectionResultLink: inspection.inspectionResultLink || null,
       status: newStatus,
       creditsDeducted: creditResult.amountDeducted,
       remainingBalance: creditResult.isUnlimited ? 'UNLIMITED' : creditResult.balanceAfter,

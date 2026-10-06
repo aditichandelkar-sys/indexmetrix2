@@ -3,9 +3,9 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
 import { validateUrlForSSRF } from '@/lib/ssrf';
-import { normalizeUrl, findBestMatchingProperty } from '@/lib/property-matcher';
+import { normalizeUrl, findBestMatchingProperty, matchesSearchConsoleProperty } from '@/lib/property-matcher';
 import { deductCredits, addCredits, CREDIT_COSTS } from '@/lib/credit-ledger';
-import { inspectUrlWithGoogle, sanitizeGoogleError } from '@/lib/google-client';
+import { inspectUrlWithGoogle, sanitizeGoogleError, normalizeGoogleVerdictToStatus } from '@/lib/google-client';
 import { isThirdPartyProject } from '@/lib/project-utils';
 
 export const dynamic = 'force-dynamic';
@@ -152,8 +152,25 @@ export async function POST(req: NextRequest) {
     }
 
     // Check which connected Search Console property owns / covers the submitted URL
-    const match = findBestMatchingProperty(normalizedUrl, userProperties);
-    if (!match.property) {
+    // Prioritize explicitly linked project property if it covers the submitted URL
+    let matchedProperty: any = null;
+    const projectLinkedProp = userProperties.find(
+      (p) =>
+        (project.googlePropertyId && p.id === project.googlePropertyId) ||
+        (project.googlePropertyUrl && p.propertyUrl === project.googlePropertyUrl) ||
+        (p.projectId === project.id)
+    );
+
+    if (projectLinkedProp && matchesSearchConsoleProperty(normalizedUrl, projectLinkedProp.propertyUrl)) {
+      matchedProperty = projectLinkedProp;
+    } else {
+      const match = findBestMatchingProperty(normalizedUrl, userProperties);
+      if (match.property) {
+        matchedProperty = userProperties.find((p) => p.id === match.property!.id) || null;
+      }
+    }
+
+    if (!matchedProperty || !matchedProperty.googleAccount) {
       const authorizedList = userProperties.map((p) => p.propertyUrl).join(', ');
       return NextResponse.json(
         {
@@ -167,9 +184,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const matchedProperty = userProperties.find((p) => p.id === match.property!.id)!;
     const googleAccount = matchedProperty.googleAccount;
     const targetProjectId = project.id;
+
+    // Auto-link project to matched property if not yet linked
+    if (!project.googlePropertyId && !isThirdPartyProject(project)) {
+      await prisma.project.update({
+        where: { id: project.id },
+        data: {
+          googlePropertyId: matchedProperty.id,
+          googlePropertyUrl: matchedProperty.propertyUrl,
+        },
+      }).catch(() => {});
+    }
 
     // 5. Upsert URL record
     const urlRecord = await prisma.url.upsert({
@@ -269,13 +296,7 @@ export async function POST(req: NextRequest) {
 
     // 9. Update URL Status accurately:
     // Never claim INDEXED unless Google verdict is PASS or coverageState explicitly indicates indexed
-    let newStatus = 'NOT_INDEXED';
-    const coverage = (ir.coverageState || '').toLowerCase();
-    if (ir.verdict === 'PASS' || coverage.includes('submitted and indexed') || coverage.includes('indexed, not in sitemap')) {
-      newStatus = 'INDEXED';
-    } else {
-      newStatus = 'NOT_INDEXED';
-    }
+    const newStatus = normalizeGoogleVerdictToStatus(ir.verdict, ir.coverageState);
 
     await prisma.url.update({
       where: { id: urlRecord.id },
@@ -283,6 +304,9 @@ export async function POST(req: NextRequest) {
         status: newStatus as any,
         lastInspectedAt: new Date(),
         lastCrawl: ir.lastCrawlTime ? new Date(ir.lastCrawlTime) : undefined,
+        lastGoogleVerdict: ir.verdict,
+        lastCoverageState: ir.coverageState || null,
+        lastInspectionId: savedInspection.id,
         creditsUsed: { increment: creditResult.amountDeducted },
       },
     });
@@ -297,6 +321,22 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const inspectionData = {
+      id: savedInspection.id,
+      verdict: ir.verdict,
+      coverageState: ir.coverageState || null,
+      indexingState: ir.indexingState || null,
+      robotsTxtState: ir.robotsTxtState || null,
+      pageFetchState: ir.pageFetchState || null,
+      googleCanonical: ir.googleCanonical || null,
+      userCanonical: ir.userCanonical || null,
+      crawledAs: ir.crawledAs || null,
+      lastCrawlTime: ir.lastCrawlTime || null,
+      referringUrls: ir.referringUrls || [],
+      inspectionResultLink: inspection.inspectionResultLink || null,
+      inspectedAt: savedInspection.inspectedAt,
+    };
+
     return NextResponse.json({
       success: true,
       url: {
@@ -309,21 +349,9 @@ export async function POST(req: NextRequest) {
         propertyUrl: matchedProperty.propertyUrl,
         permissionLevel: matchedProperty.permissionLevel,
       },
-      inspection: {
-        id: savedInspection.id,
-        verdict: ir.verdict,
-        coverageState: ir.coverageState || null,
-        indexingState: ir.indexingState || null,
-        robotsTxtState: ir.robotsTxtState || null,
-        pageFetchState: ir.pageFetchState || null,
-        googleCanonical: ir.googleCanonical || null,
-        userCanonical: ir.userCanonical || null,
-        crawledAs: ir.crawledAs || null,
-        lastCrawlTime: ir.lastCrawlTime || null,
-        referringUrls: ir.referringUrls || [],
-        inspectionResultLink: inspection.inspectionResultLink || null,
-        inspectedAt: savedInspection.inspectedAt,
-      },
+      inspection: inspectionData,
+      inspectionResult: inspectionData,
+      inspectionResultLink: inspection.inspectionResultLink || null,
       status: newStatus,
       creditsDeducted: creditResult.amountDeducted,
       remainingBalance: creditResult.isUnlimited ? 'UNLIMITED' : creditResult.balanceAfter,
