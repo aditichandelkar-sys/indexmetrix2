@@ -33,6 +33,7 @@ enum UrlStatus {
   READY
   SUBMISSION_PENDING
   SUBMITTED
+  PROCESSING
   DISCOVERY_PENDING
   CRAWL_DETECTED
   INSPECTION_PENDING
@@ -40,6 +41,7 @@ enum UrlStatus {
   NOT_INDEXED
   BLOCKED
   ERROR
+  FAILED
 }
 
 enum JobOperation {
@@ -230,6 +232,12 @@ model Url {
   discoveryStatus         String?
   scheduledReinspectionAt DateTime?
   matchedPropertyId       String?
+  provider                String?
+  providerBatchId         String?
+  providerStatus          String?
+  submittedAt             DateTime?
+  lastCheckedAt           DateTime?
+  providerError           String?
   creditsUsed             Int                @default(0)
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt

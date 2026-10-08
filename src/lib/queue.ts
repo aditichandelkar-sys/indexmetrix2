@@ -558,6 +558,93 @@ export async function processBatchIndexingJob(batchJobId: string): Promise<void>
         },
       });
 
+      // Check if URL is associated with IndexInstantly provider
+      let jobMeta: any = null;
+      try {
+        if (job.metadata) jobMeta = JSON.parse(job.metadata);
+      } catch {
+        jobMeta = null;
+      }
+
+      const isIndexInstantly =
+        item.url.provider === 'INDEXINSTANTLY' ||
+        jobMeta?.provider === 'INDEXINSTANTLY' ||
+        Boolean(item.url.providerBatchId || jobMeta?.batchId);
+
+      const batchId = item.url.providerBatchId || jobMeta?.batchId;
+
+      if (isIndexInstantly && batchId) {
+        const { getBatchStatus } = await import('./indexinstantly');
+        const statusRes = await getBatchStatus(batchId);
+
+        if (statusRes.success && statusRes.data) {
+          const providerStatus = statusRes.data.status;
+          const normalized = statusRes.data.normalizedStatus; // 'SUBMITTED' | 'PROCESSING' | 'INDEXED' | 'FAILED' | 'BLOCKED'
+
+          const updateData: any = {
+            provider: 'INDEXINSTANTLY',
+            providerBatchId: batchId,
+            providerStatus,
+            lastCheckedAt: new Date(),
+          };
+
+          if (normalized === 'INDEXED') {
+            updateData.status = 'INDEXED';
+            updateData.lastIndexedAt = new Date();
+          } else if (normalized === 'PROCESSING') {
+            updateData.status = 'PROCESSING';
+          } else if (normalized === 'FAILED') {
+            updateData.status = 'FAILED';
+            updateData.providerError = statusRes.data.raw?.error || 'Provider reported indexing failure';
+          } else if (normalized === 'BLOCKED') {
+            updateData.status = 'BLOCKED';
+            updateData.providerError = 'Refused by content rule';
+          } else {
+            // queued / duplicate / pending
+            updateData.status = 'SUBMITTED';
+          }
+
+          await prisma.url.update({
+            where: { id: item.urlId },
+            data: updateData,
+          });
+
+          await prisma.urlStatusHistory.create({
+            data: {
+              urlId: item.urlId,
+              newStatus: updateData.status,
+              source: 'INDEXINSTANTLY',
+              reason: `IndexInstantly batch status: ${providerStatus} (Batch ID: ${batchId})`,
+            },
+          });
+
+          const itemJobStatus =
+            normalized === 'INDEXED'
+              ? 'COMPLETED'
+              : normalized === 'FAILED'
+              ? 'FAILED'
+              : 'PROCESSING';
+
+          await prisma.indexingJobItem.update({
+            where: { id: item.id },
+            data: {
+              status: itemJobStatus,
+              completedAt: normalized === 'INDEXED' || normalized === 'FAILED' ? new Date() : null,
+              lastError: normalized === 'FAILED' ? (statusRes.data.raw?.error || 'Indexing failed') : null,
+              operationResult: JSON.stringify({
+                provider: 'INDEXINSTANTLY',
+                batchId,
+                status: providerStatus,
+                normalizedStatus: normalized,
+                details: statusRes.data,
+              }),
+            },
+          });
+
+          continue;
+        }
+      }
+
       // 3. Search Console Property Matching
       const match = findBestMatchingProperty(item.url.normalizedUrl, userProperties);
       const matchedProperty = match.property;
@@ -653,20 +740,71 @@ export async function processBatchIndexingJob(batchJobId: string): Promise<void>
   const total = finalItems.length;
   const completedCount = finalItems.filter((i) => i.status === 'COMPLETED').length;
   const failedCount = finalItems.filter((i) => i.status === 'FAILED').length;
+  const processingCount = finalItems.filter((i) => i.status === 'PROCESSING').length;
 
   let finalStatus = 'COMPLETED';
-  if (failedCount === total) finalStatus = 'FAILED';
+  if (processingCount > 0) finalStatus = 'PROCESSING';
+  else if (failedCount === total) finalStatus = 'FAILED';
   else if (failedCount > 0) finalStatus = 'PARTIAL';
 
   await prisma.indexingJob.update({
     where: { id: job.id },
     data: {
       status: finalStatus,
-      completedAt: new Date(),
-      processingUrls: 0,
+      completedAt: finalStatus === 'PROCESSING' ? null : new Date(),
+      processingUrls: processingCount,
       queuedUrls: 0,
       completedUrls: completedCount,
       failedUrls: failedCount,
     },
   });
+
+  // If there are still items processing from IndexInstantly, schedule the next status check asynchronously
+  if (processingCount > 0) {
+    let jobMeta: any = null;
+    try {
+      if (job.metadata) jobMeta = JSON.parse(job.metadata);
+    } catch {
+      jobMeta = null;
+    }
+
+    if (jobMeta?.provider === 'INDEXINSTANTLY' || job.items.some((i) => i.url.provider === 'INDEXINSTANTLY')) {
+      const pollCount = (jobMeta?.pollCount || 0) + 1;
+      const MAX_POLLS = 10;
+      if (pollCount < MAX_POLLS) {
+        await prisma.indexingJob.update({
+          where: { id: job.id },
+          data: {
+            metadata: JSON.stringify({ ...jobMeta, pollCount }),
+          },
+        });
+
+        const pollDelay = 15000; // 15 seconds
+
+        if (!useInMemoryFallback && redisConnection) {
+          try {
+            if (!sharedQueue) {
+              sharedQueue = new Queue('index-matrix-jobs', { connection: redisConnection });
+            }
+            await sharedQueue.add('BATCH_INDEXING', { batchJobId: job.id }, {
+              jobId: `batch_${job.id}_poll_${pollCount}`,
+              delay: pollDelay,
+              removeOnComplete: 100,
+              removeOnFail: 500,
+            });
+          } catch {
+            setTimeout(() => {
+              inProcessBatchQueue.push(job.id);
+              processInProcessBatchQueue();
+            }, pollDelay);
+          }
+        } else {
+          setTimeout(() => {
+            inProcessBatchQueue.push(job.id);
+            processInProcessBatchQueue();
+          }, pollDelay);
+        }
+      }
+    }
+  }
 }

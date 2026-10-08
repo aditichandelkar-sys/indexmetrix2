@@ -5,7 +5,8 @@
   "description": "Enterprise SEO URL Analysis, Google Search Console Integration & Indexing Management SaaS",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "postinstall": "node scripts/prisma-generate.js",
+    "build": "node scripts/prisma-generate.js && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",

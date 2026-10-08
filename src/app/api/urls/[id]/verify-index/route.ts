@@ -46,6 +46,62 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // Quick fresh analysis
     const analysis = await analyzeUrl(urlRecord.normalizedUrl);
 
+    // 1. If URL was submitted through IndexInstantly, query provider status
+    if (urlRecord.provider === 'INDEXINSTANTLY' && urlRecord.providerBatchId) {
+      const { getBatchStatus } = await import('@/lib/indexinstantly');
+      const batchRes = await getBatchStatus(urlRecord.providerBatchId);
+
+      if (batchRes.success && batchRes.data) {
+        const rawStatus = batchRes.data.status;
+        const normalized = batchRes.data.normalizedStatus;
+
+        if (normalized === 'INDEXED') {
+          await prisma.url.update({
+            where: { id: urlRecord.id },
+            data: {
+              status: 'INDEXED',
+              providerStatus: rawStatus,
+              lastIndexedAt: new Date(),
+              lastCheckedAt: new Date(),
+              discoveryStatus: 'INDEXED_CONFIRMED',
+            },
+          });
+
+          await prisma.urlStatusHistory.create({
+            data: {
+              urlId: urlRecord.id,
+              newStatus: 'INDEXED',
+              source: 'INDEXINSTANTLY',
+              reason: `IndexInstantly verified batch status: ${rawStatus}`,
+            },
+          });
+
+          return NextResponse.json({
+            success: true,
+            url: urlRecord.normalizedUrl,
+            verification: {
+              result: 'INDEXED_CONFIRMED',
+              verificationMethod: 'INDEXINSTANTLY',
+              explanation: `IndexInstantly confirmed URL indexing (Status: ${rawStatus})`,
+              details: batchRes.data,
+            },
+          });
+        } else {
+          await prisma.url.update({
+            where: { id: urlRecord.id },
+            data: {
+              status: normalized as any,
+              providerStatus: rawStatus,
+              lastCheckedAt: new Date(),
+              ...(normalized === 'FAILED'
+                ? { providerError: batchRes.data.raw?.error || 'Provider reported indexing failure' }
+                : {}),
+            },
+          });
+        }
+      }
+    }
+
     const adapter = new SearchVerificationAdapter();
     const verification = await adapter.verify({
       urlId: urlRecord.id,

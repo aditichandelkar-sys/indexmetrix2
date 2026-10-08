@@ -6,6 +6,7 @@ import { normalizeUrl, findBestMatchingProperty } from '@/lib/property-matcher';
 import { validateUrlForSSRF } from '@/lib/ssrf';
 import { isThirdPartyProject } from '@/lib/project-utils';
 import { createBatchIndexingJob } from '@/lib/queue';
+import { submitUrls } from '@/lib/indexinstantly';
 
 export const dynamic = 'force-dynamic';
 
@@ -172,7 +173,87 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // 6. Create Legitimate Discovery / Submission Job in BullMQ Worker
+    if (isThirdParty) {
+      // 6a. THIRD-PARTY URL FLOW: Submit to IndexInstantly API
+      const providerRes = await submitUrls([normalizedUrl]);
+      if (!providerRes.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: providerRes.error?.code || 'PROVIDER_ERROR',
+              message: providerRes.error?.message || 'Failed to submit URL to IndexInstantly',
+            },
+          },
+          { status: providerRes.error?.statusCode || 400 }
+        );
+      }
+
+      const batch = providerRes.data!;
+      const batchId = batch.batch_id;
+
+      // Update URL with provider tracking (IndexInstantly)
+      const updatedUrl = await prisma.url.update({
+        where: { id: urlRecord.id },
+        data: {
+          provider: 'INDEXINSTANTLY',
+          providerBatchId: batchId,
+          providerStatus: batch.status || 'queued',
+          status: 'SUBMITTED',
+          submittedAt: new Date(),
+          lastCheckedAt: new Date(),
+          providerError: null,
+        } as any,
+      });
+
+      await prisma.urlStatusHistory.create({
+        data: {
+          urlId: urlRecord.id,
+          newStatus: 'SUBMITTED',
+          source: 'INDEXINSTANTLY',
+          reason: `Submitted to IndexInstantly (Batch ID: ${batchId}, Status: ${batch.status || 'queued'})`,
+        },
+      });
+
+      // Enqueue status monitoring in existing BullMQ queue / worker
+      const jobResult = await createBatchIndexingJob({
+        userId: user.id,
+        projectId: project.id,
+        urlIds: [urlRecord.id],
+        type: 'DISCOVERY_AND_INSPECTION',
+        idempotencyKey: `submit_${urlRecord.id}_${Date.now()}`,
+        metadata: {
+          provider: 'INDEXINSTANTLY',
+          batchId,
+          submittedAt: new Date().toISOString(),
+        },
+      });
+
+      if (!jobResult.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: 'JOB_CREATION_FAILED',
+              message: jobResult.error || 'Failed to dispatch indexing job',
+            },
+          },
+          { status: 400 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        submissionType: 'THIRD_PARTY_DISCOVERY',
+        url: updatedUrl,
+        job: jobResult.job,
+        batchId,
+        provider: 'INDEXINSTANTLY',
+        message: 'Third-party public URL accepted by IndexInstantly. Status monitoring enqueued.',
+      });
+    }
+
+    // 6b. OWNED / GSC FLOW (Completely unchanged):
     const jobResult = await createBatchIndexingJob({
       userId: user.id,
       projectId: project.id,
@@ -196,12 +277,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      submissionType: isThirdParty ? 'THIRD_PARTY_DISCOVERY' : 'OWNED_GSC',
+      submissionType: 'OWNED_GSC',
       url: urlRecord,
       job: jobResult.job,
-      message: isThirdParty
-        ? 'Third-party public URL accepted and dispatched for automated crawlability audit and discovery signals.'
-        : 'Owned URL successfully submitted for Google Search Console inspection and indexing discovery.',
+      message: 'Owned URL successfully submitted for Google Search Console inspection and indexing discovery.',
     });
   } catch (err: any) {
     return NextResponse.json(

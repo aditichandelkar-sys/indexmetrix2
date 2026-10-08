@@ -166,6 +166,12 @@ model Url {
   discoveryStatus         String?
   scheduledReinspectionAt DateTime?
   matchedPropertyId       String?
+  provider                String?
+  providerBatchId         String?
+  providerStatus          String?
+  submittedAt             DateTime?
+  lastCheckedAt           DateTime?
+  providerError           String?
   creditsUsed             Int                @default(0)
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt

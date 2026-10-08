@@ -1,0 +1,11 @@
+-- AlterEnum
+ALTER TYPE "UrlStatus" ADD VALUE 'PROCESSING';
+ALTER TYPE "UrlStatus" ADD VALUE 'FAILED';
+
+-- AlterTable
+ALTER TABLE "Url" ADD COLUMN "provider" TEXT;
+ALTER TABLE "Url" ADD COLUMN "providerBatchId" TEXT;
+ALTER TABLE "Url" ADD COLUMN "providerStatus" TEXT;
+ALTER TABLE "Url" ADD COLUMN "submittedAt" TIMESTAMP(3);
+ALTER TABLE "Url" ADD COLUMN "lastCheckedAt" TIMESTAMP(3);
+ALTER TABLE "Url" ADD COLUMN "providerError" TEXT;

@@ -97,12 +97,41 @@ describe('Third-Party URL Indexing Flow & GSC Separation', () => {
       },
     });
 
+    // Mock IndexInstantly API key
+    process.env.INDEXINSTANTLY_API_KEY = 'ii_live_test_secret_key';
+
     // Mock authenticated user
     vi.spyOn(auth, 'getSessionUser').mockResolvedValue(customerUser as any);
 
     // Mock external network calls to avoid hitting live APIs
     vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: any) => {
       const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input?.url || '';
+      if (urlStr.includes('indexinstantly')) {
+        if (urlStr.includes('/index')) {
+          return new Response(
+            JSON.stringify({
+              batch_id: 'btch_test_9a_123',
+              accepted: 1,
+              blocked: 0,
+              duplicates: 0,
+              duplicate_urls: [],
+              status: 'queued',
+              remaining_credits: 5000,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+        if (urlStr.includes('/batch/')) {
+          return new Response(
+            JSON.stringify({
+              batch_id: 'btch_test_9a_123',
+              status: 'queued',
+              accepted: 1,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+      }
       if (urlStr.includes('pubsubhubbub') || urlStr.includes('indexnow.org')) {
         return new Response(null, { status: 200 });
       }
@@ -114,6 +143,7 @@ describe('Third-Party URL Indexing Flow & GSC Separation', () => {
   });
 
   afterEach(() => {
+    delete process.env.INDEXINSTANTLY_API_KEY;
     vi.restoreAllMocks();
   });
 
@@ -139,6 +169,8 @@ describe('Third-Party URL Indexing Flow & GSC Separation', () => {
     expect(data.url).toBeDefined();
     expect(data.url.normalizedUrl).toBe(THIRD_PARTY_URL);
     expect(data.url.matchedPropertyId).toBeNull();
+    expect(data.url.provider).toBe('INDEXINSTANTLY');
+    expect(data.url.providerBatchId).toBe('btch_test_9a_123');
     expect(data.job).toBeDefined();
     expect(data.job.type).toBe('DISCOVERY_AND_INSPECTION');
   });

@@ -135,9 +135,31 @@ describe('Google Search Console Owned Integration & Verification', () => {
         googlePropertyUrl: scProperty.propertyUrl,
       },
     });
+
+    process.env.INDEXINSTANTLY_API_KEY = 'ii_live_mock_gsc_test_key';
+
+    vi.spyOn(global, 'fetch').mockImplementation(async (input: any) => {
+      const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input?.url || '';
+      if (urlStr.includes('indexinstantly')) {
+        return new Response(
+          JSON.stringify({
+            batch_id: 'btch_test_gsc_123',
+            accepted: 1,
+            blocked: 0,
+            duplicates: 0,
+            duplicate_urls: [],
+            status: 'queued',
+            remaining_credits: 5000,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      return new Response('<html><head><title>Mocked</title></head></html>', { status: 200 });
+    });
   });
 
   afterEach(() => {
+    delete process.env.INDEXINSTANTLY_API_KEY;
     vi.restoreAllMocks();
   });
 
