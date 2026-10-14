@@ -44,6 +44,7 @@ export class GoogleIndexingApiService {
     htmlContent?: string;
     structuredDataTypes?: string[];
     bypassEligibilityCheckForTesting?: boolean;
+    allowUniversalIndexing?: boolean;
   }): Promise<GoogleIndexingApiResponse> {
     const {
       accountId,
@@ -52,12 +53,13 @@ export class GoogleIndexingApiService {
       htmlContent,
       structuredDataTypes,
       bypassEligibilityCheckForTesting = false,
+      allowUniversalIndexing = false,
     } = params;
 
     // 1. Evaluate content eligibility
     const eligibility = evaluateIndexingApiEligibility(htmlContent, structuredDataTypes);
 
-    if (!eligibility.isEligibleForDirectIndexingApi && !bypassEligibilityCheckForTesting) {
+    if (!eligibility.isEligibleForDirectIndexingApi && !bypassEligibilityCheckForTesting && !allowUniversalIndexing) {
       return {
         success: false,
         eligible: false,

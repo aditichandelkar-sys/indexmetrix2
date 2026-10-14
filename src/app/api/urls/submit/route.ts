@@ -174,7 +174,75 @@ export async function POST(req: NextRequest) {
     });
 
     if (isThirdParty) {
-      // 6a. THIRD-PARTY URL FLOW: Submit to IndexInstantly API
+      // Check if client explicitly requested MULTI_VECTOR_ENGINE mode
+      const reqProvider = (body as any)?.provider;
+      const reqMode = (body as any)?.mode;
+
+      if (reqProvider === 'MULTI_VECTOR_ENGINE' || reqMode === 'multi-vector') {
+        const batchId = `mve_${Date.now()}_${Buffer.from(normalizedUrl).toString('base64url').slice(0, 12)}`;
+        const { dispatchFastIndexing } = await import('@/lib/fast-indexer');
+        dispatchFastIndexing(normalizedUrl).catch(() => null);
+
+        const updatedUrl = await prisma.url.update({
+          where: { id: urlRecord.id },
+          data: {
+            provider: 'MULTI_VECTOR_ENGINE',
+            providerBatchId: batchId,
+            providerStatus: 'queued',
+            status: 'SUBMITTED',
+            submittedAt: new Date(),
+            lastCheckedAt: new Date(),
+            providerError: null,
+          } as any,
+        });
+
+        await prisma.urlStatusHistory.create({
+          data: {
+            urlId: urlRecord.id,
+            newStatus: 'SUBMITTED',
+            source: 'MULTI_VECTOR_ENGINE' as any,
+            reason: `Submitted to Multi-Vector Discovery Engine (Batch ID: ${batchId})`,
+          },
+        });
+
+        const jobResult = await createBatchIndexingJob({
+          userId: user.id,
+          projectId: project.id,
+          urlIds: [urlRecord.id],
+          type: 'DISCOVERY_AND_INSPECTION',
+          idempotencyKey: `submit_${urlRecord.id}_${Date.now()}`,
+          metadata: {
+            provider: 'MULTI_VECTOR_ENGINE',
+            batchId,
+            submittedAt: new Date().toISOString(),
+          },
+        });
+
+        if (!jobResult.success) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: 'JOB_CREATION_FAILED',
+                message: jobResult.error || 'Failed to dispatch indexing job',
+              },
+            },
+            { status: 400 }
+          );
+        }
+
+        return NextResponse.json({
+          success: true,
+          submissionType: 'THIRD_PARTY_DISCOVERY',
+          url: updatedUrl,
+          job: jobResult.job,
+          batchId,
+          provider: 'MULTI_VECTOR_ENGINE',
+          message: 'Third-party public URL accepted by Multi-Vector Discovery Engine. Bot crawl vectors dispatched.',
+        });
+      }
+
+      // Default Third-Party Flow: Submit to IndexInstantly API
       const providerRes = await submitUrls([normalizedUrl]);
       if (!providerRes.success) {
         return NextResponse.json(
@@ -192,7 +260,7 @@ export async function POST(req: NextRequest) {
       const batch = providerRes.data!;
       const batchId = batch.batch_id;
 
-      // Update URL with provider tracking (IndexInstantly)
+      // Update URL with provider tracking
       const updatedUrl = await prisma.url.update({
         where: { id: urlRecord.id },
         data: {

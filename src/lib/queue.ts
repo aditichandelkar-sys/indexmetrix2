@@ -566,12 +566,61 @@ export async function processBatchIndexingJob(batchJobId: string): Promise<void>
         jobMeta = null;
       }
 
-      const isIndexInstantly =
-        item.url.provider === 'INDEXINSTANTLY' ||
-        jobMeta?.provider === 'INDEXINSTANTLY' ||
-        Boolean(item.url.providerBatchId || jobMeta?.batchId);
-
       const batchId = item.url.providerBatchId || jobMeta?.batchId;
+      const isMultiVector =
+        item.url.provider === 'MULTI_VECTOR_ENGINE' ||
+        jobMeta?.provider === 'MULTI_VECTOR_ENGINE' ||
+        Boolean(batchId && String(batchId).startsWith('mve_'));
+
+      if (isMultiVector) {
+        const { dispatchFastIndexing } = await import('./fast-indexer');
+        const fastResult = await dispatchFastIndexing(item.url.normalizedUrl);
+
+        // Check SERP status
+        const { checkGoogleIndexStatus } = await import('./serp-checker');
+        const serpCheck = await checkGoogleIndexStatus(item.url.normalizedUrl);
+
+        const newStatus = serpCheck.isIndexed ? 'INDEXED' : 'PROCESSING';
+
+        await prisma.url.update({
+          where: { id: item.urlId },
+          data: {
+            status: newStatus as any,
+            providerStatus: serpCheck.isIndexed ? 'indexed' : 'crawled',
+            lastCheckedAt: new Date(),
+            ...(serpCheck.isIndexed ? { lastIndexedAt: new Date() } : {}),
+          },
+        });
+
+        await prisma.urlStatusHistory.create({
+          data: {
+            urlId: item.urlId,
+            newStatus: newStatus as any,
+            source: 'MULTI_VECTOR_ENGINE' as any,
+            reason: `Multi-Vector crawl vectors dispatched: ${fastResult.successfulVectors}/${fastResult.totalVectors} vectors active. SERP Status: ${serpCheck.statusText}`,
+          },
+        });
+
+        await prisma.indexingJobItem.update({
+          where: { id: item.id },
+          data: {
+            status: 'COMPLETED',
+            completedAt: new Date(),
+            operationResult: JSON.stringify({
+              provider: 'MULTI_VECTOR_ENGINE',
+              fastIndex: fastResult,
+              serpCheck,
+            }),
+          },
+        });
+
+        continue;
+      }
+
+      const isIndexInstantly =
+        (item.url.provider === 'INDEXINSTANTLY' ||
+        jobMeta?.provider === 'INDEXINSTANTLY' ||
+        Boolean(batchId)) && !isMultiVector;
 
       if (isIndexInstantly && batchId) {
         const { getBatchStatus } = await import('./indexinstantly');

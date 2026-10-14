@@ -166,11 +166,8 @@ function UrlsManagerContent() {
     }
 
     if (isThirdPartyProject) {
-      setActionMessage({
-        type: 'error',
-        text: 'Google Search Console URL Inspection is unavailable for third-party URLs because they are not owned properties. Please click "Submit for Indexing" to run the discovery workflow.',
-      });
-      return;
+      // Seamlessly execute discovery indexing submission for third-party projects without blocking
+      return handleSubmitForIndexing(e);
     }
 
     setIsDirectInspecting(true);
@@ -949,21 +946,14 @@ function UrlsManagerContent() {
                           <button
                             onClick={() => {
                               if (!u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party'))) {
-                                setActionMessage({
-                                  type: 'error',
-                                  text: 'GSC URL Inspection requires verified Search Console ownership. For 3rd-party URLs, please click the Lightning button to run Technical Discovery.',
-                                });
+                                handleDiscoveryWorkflow(u.id);
                                 return;
                               }
                               handleReinspect(u.id);
                             }}
-                            disabled={isRowLoading || (!u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party')))}
-                            title={!u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party')) ? 'GSC Inspection unavailable for 3rd-party URL (unowned property)' : 'Inspect Now with Google Search Console'}
-                            className={`p-1.5 rounded-lg bg-white/5 hover:bg-white/10 ${
-                              !u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party'))
-                                ? 'text-slate-600 cursor-not-allowed opacity-40'
-                                : 'text-cyan-400 hover:text-cyan-300'
-                            } disabled:opacity-30`}
+                            disabled={isRowLoading}
+                            title={!u.matchedPropertyId && (u.project?.domain === 'third-party-links.io' || u.project?.name?.toLowerCase().includes('3rd-party')) ? 'Dispatch Fast Bot Crawl & Re-Verify' : 'Inspect Now with Google Search Console'}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-cyan-400 hover:text-cyan-300 disabled:opacity-30"
                           >
                             <RefreshCw className={`w-3.5 h-3.5 ${isRowLoading ? 'animate-spin' : ''}`} />
                           </button>

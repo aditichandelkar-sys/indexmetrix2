@@ -62,6 +62,13 @@ export default async function RelayPage({ params }: RelayProps) {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6 font-sans">
+      {/* Search Engine and Crawler Fast Redirect Directives */}
+      <head>
+        <meta httpEquiv="refresh" content={`0;url=${targetUrl}`} />
+        <link rel="canonical" href={targetUrl} />
+        <meta name="robots" content="index, follow" />
+      </head>
+
       <div className="max-w-lg w-full bg-slate-900/90 border border-slate-800 rounded-3xl p-8 shadow-2xl backdrop-blur-xl text-center">
         <div className="w-14 h-14 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl flex items-center justify-center mx-auto mb-6">
           <ShieldCheck className="w-7 h-7 text-indigo-400" />
