@@ -586,7 +586,8 @@ export async function processBatchIndexingJob(batchJobId: string): Promise<void>
           where: { id: item.urlId },
           data: {
             status: newStatus as any,
-            providerStatus: serpCheck.isIndexed ? 'indexed' : 'crawled',
+            providerStatus: serpCheck.isIndexed ? 'indexed' : 'dispatched',
+            discoveryStatus: serpCheck.verificationState,
             lastCheckedAt: new Date(),
             ...(serpCheck.isIndexed ? { lastIndexedAt: new Date() } : {}),
           },

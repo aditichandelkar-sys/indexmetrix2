@@ -82,6 +82,11 @@ describe('Third-Party URL Indexing Flow & GSC Separation', () => {
           status: 'ACTIVE',
         },
       });
+    } else {
+      await prisma.googleAccount.update({
+        where: { id: googleAccount.id },
+        data: { status: 'ACTIVE' },
+      });
     }
 
     await prisma.searchConsoleProperty.upsert({

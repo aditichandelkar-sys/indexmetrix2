@@ -107,9 +107,30 @@ export default function QuickIndexPage() {
       const data = await res.json();
       if (data.success && data.report) {
         setSerpResults((prev) => ({ ...prev, [targetUrl]: data.report }));
+      } else {
+        setSerpResults((prev) => ({
+          ...prev,
+          [targetUrl]: {
+            targetUrl,
+            isIndexed: false,
+            verificationState: 'UNABLE_TO_VERIFY',
+            statusText: 'UNABLE_TO_VERIFY',
+            details: data.error || 'Unable to verify Google SERP status. Please check live SERP directly.',
+          },
+        }));
       }
     } catch (err: any) {
       console.error('SERP check error:', err);
+      setSerpResults((prev) => ({
+        ...prev,
+        [targetUrl]: {
+          targetUrl,
+          isIndexed: false,
+          verificationState: 'UNABLE_TO_VERIFY',
+          statusText: 'UNABLE_TO_VERIFY',
+          details: 'Network error or timeout during verification. Please check live SERP directly.',
+        },
+      }));
     } finally {
       setCheckingSerp((prev) => ({ ...prev, [targetUrl]: false }));
     }
@@ -447,41 +468,54 @@ export default function QuickIndexPage() {
                     {serpResults[res.targetUrl] && (
                       <div
                         className={`p-3.5 rounded-xl border text-xs flex items-start gap-3 ${
-                          serpResults[res.targetUrl].isIndexed
+                          serpResults[res.targetUrl].verificationState === 'CONFIRMED_INDEXED' || serpResults[res.targetUrl].isIndexed
                             ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                            : serpResults[res.targetUrl].verificationState === 'UNABLE_TO_VERIFY'
+                            ? 'bg-slate-800/60 border-slate-700 text-slate-300'
                             : 'bg-amber-500/10 border-amber-500/25 text-amber-300'
                         }`}
                       >
-                        {serpResults[res.targetUrl].isIndexed ? (
+                        {serpResults[res.targetUrl].verificationState === 'CONFIRMED_INDEXED' || serpResults[res.targetUrl].isIndexed ? (
                           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                        ) : serpResults[res.targetUrl].verificationState === 'UNABLE_TO_VERIFY' ? (
+                          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                         ) : (
                           <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                         )}
                         <div className="space-y-1">
                           <div className="font-bold flex items-center gap-2 text-sm">
                             <span>
-                              {serpResults[res.targetUrl].isIndexed
+                              {serpResults[res.targetUrl].verificationState === 'CONFIRMED_INDEXED' || serpResults[res.targetUrl].isIndexed
                                 ? '🟢 CONFIRMED INDEXED ON GOOGLE SERP'
-                                : '⏳ CRAWL QUEUED — PENDING PUBLIC SERP PLACEMENT'}
+                                : serpResults[res.targetUrl].verificationState === 'UNABLE_TO_VERIFY'
+                                ? '⚠️ UNABLE TO VERIFY (GOOGLE RATE-LIMITED OR BLOCKED)'
+                                : '⚪ NOT INDEXED ON GOOGLE SERP'}
                             </span>
                           </div>
                           <p className="text-[11px] leading-relaxed opacity-90">
                             {serpResults[res.targetUrl].details}
                           </p>
+                          {serpResults[res.targetUrl].matchedResultUrl && (
+                            <p className="text-[10px] text-emerald-400/80 font-mono mt-1 break-all">
+                              Matched Result: {serpResults[res.targetUrl].matchedResultUrl}
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
                   </div>
 
-                  {/* Next Step Guidance */}
-                  <div className="p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Googlebot crawl signal queued. Crawl event confirmation expected shortly.
+                  {/* Multi-Vector Pipeline Telemetry State */}
+                  <div className="p-3 bg-white/[0.02] border border-white/10 rounded-xl text-xs text-slate-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-slate-300">
+                      <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        <strong>Signals Dispatched</strong> — Crawl signal queued across multi-vector pipeline. (Googlebot crawl logs and SERP presence verify independently).
+                      </span>
                     </span>
                     <button
                       onClick={() => copyToClipboard(res.targetUrl)}
-                      className="text-xs text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1"
+                      className="text-xs text-amber-400 hover:text-amber-300 font-medium flex items-center gap-1 shrink-0"
                     >
                       {copiedUrl === res.targetUrl ? (
                         <>

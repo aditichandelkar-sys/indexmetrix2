@@ -90,6 +90,17 @@ export class SearchVerificationAdapter implements DiscoveryAdapter {
         };
       }
 
+      if (serpCheck.verificationState === 'UNABLE_TO_VERIFY') {
+        return {
+          verificationMethod: 'PUBLIC_SEARCH_OBSERVATION',
+          verifiedAt: now,
+          result: 'UNAVAILABLE',
+          confidence: 'LOW',
+          explanation: `Public search observation: ${serpCheck.details}`,
+          details: serpCheck,
+        };
+      }
+
       return {
         verificationMethod: 'PUBLIC_SEARCH_OBSERVATION',
         verifiedAt: now,
