@@ -223,13 +223,20 @@ export function detectGoogleBlock(status: number, html: string): { isBlocked: bo
     'recaptcha/api.js',
     'action="CaptchaRedirect"',
     'please solve this challenge',
+    '/httpservice/retry/enablejs',
+    'enablejs?sei=',
+    'Update your browser',
+    'Your browser is not supported anymore',
   ];
 
   for (const sig of blockSignatures) {
     if (html.includes(sig)) {
+      const isJsChallenge = sig.includes('enablejs') || sig.includes('browser');
       return {
         isBlocked: true,
-        reason: 'Google CAPTCHA or unusual traffic anti-bot challenge detected.',
+        reason: isJsChallenge
+          ? 'Google automated query protection (anti-bot challenge / JavaScript required).'
+          : 'Google CAPTCHA or unusual traffic anti-bot challenge detected.',
       };
     }
   }

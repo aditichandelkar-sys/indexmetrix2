@@ -303,6 +303,29 @@ describe('Google SERP Indexing Verification & Regression Suite', () => {
       expect(result.details).toContain('CAPTCHA or unusual traffic anti-bot challenge');
     });
 
+    it('returns UNABLE_TO_VERIFY when Google returns enablejs client challenge', async () => {
+      const targetUrl = 'https://en.wikipedia.org/wiki/Main_Page';
+      const enableJsHtml = `
+        <!DOCTYPE html><html><head><title>Google Search</title></head><body>
+          <noscript>
+            <meta content="0;url=/httpservice/retry/enablejs?sei=123" http-equiv="refresh">
+            <div style="display:block">Please click here if you are not redirected.</div>
+          </noscript>
+        </body></html>
+      `;
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        status: 200,
+        text: async () => enableJsHtml,
+      });
+
+      const result = await checkGoogleIndexStatus(targetUrl, { customFetch: mockFetch as any });
+
+      expect(result.isIndexed).toBe(false);
+      expect(result.verificationState).toBe('UNABLE_TO_VERIFY');
+      expect(result.details).toContain('Google automated query protection');
+    });
+
     it('returns UNABLE_TO_VERIFY on network timeout or fetch error without fabricating crawl status', async () => {
       const targetUrl = 'https://example.com/test-timeout';
 
