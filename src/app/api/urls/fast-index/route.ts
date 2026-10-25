@@ -5,7 +5,7 @@ import { getSessionUser } from '@/lib/auth';
 import { deductCredits } from '@/lib/credit-ledger';
 import { dispatchFastIndexing, FastIndexExecutionSummary } from '@/lib/fast-indexer';
 import { normalizeUrl } from '@/lib/property-matcher';
-import { getMasterServiceAccount, publishToGoogleIndexingApi } from '@/lib/google-service-account';
+import { getMasterServiceAccount } from '@/lib/google-service-account';
 
 const fastIndexSchema = z.object({
   urls: z.array(z.string().min(4)).min(1, 'At least one URL is required'),
@@ -142,47 +142,28 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Execute multi-vector crawl triggers
-      const dispatchSummary = await dispatchFastIndexing(item.normalized, { appBaseUrl });
+      // Execute multi-vector crawl triggers using opaque server-side URL record ID
+      const dispatchSummary = await dispatchFastIndexing(item.normalized, {
+        appBaseUrl,
+        relaySlug: urlRecord.id,
+      });
 
-      // If Master Google Service Account is configured, dispatch directly to Google Indexing API
+      // Google Indexing API Capability & Eligibility Gate
+      // Official Google guidelines restrict direct Indexing API notifications strictly to
+      // JobPosting and BroadcastEvent structured data. Standard web pages, forum threads,
+      // and uploaded PDF documents are not eligible for direct Indexing API submission.
       const masterCreds = await getMasterServiceAccount();
       if (masterCreds) {
-        const vStart = Date.now();
-        try {
-          // Attempt direct dispatch to Google Indexing API
-          let apiRes = await publishToGoogleIndexingApi(item.normalized, masterCreds);
-          if (apiRes.error) {
-            // Fallback: publish crawlable relay bridge on our owned platform domain
-            const relaySlug = Buffer.from(item.normalized).toString('base64url').slice(0, 32);
-            const relayGatewayUrl = `${appBaseUrl}/api/relay/${relaySlug}`;
-            apiRes = await publishToGoogleIndexingApi(relayGatewayUrl, masterCreds);
-          }
-
-          const isAccepted = !apiRes.error;
-          dispatchSummary.vectors.push({
-            vector: 'GOOGLE_INDEXING_API',
-            name: 'Official Google Indexing API',
-            status: isAccepted ? 'SUCCESS' : 'WARNING',
-            latencyMs: Date.now() - vStart,
-            message: isAccepted
-              ? `Google Indexing API notification accepted (${apiRes.notifyTime || new Date().toISOString()})`
-              : `Google Indexing API notice: ${apiRes.error?.message || 'Processed notification'}`,
-            timestamp: new Date().toISOString(),
-          });
-          dispatchSummary.totalVectors++;
-          if (isAccepted) dispatchSummary.successfulVectors++;
-        } catch (idxErr: any) {
-          dispatchSummary.vectors.push({
-            vector: 'GOOGLE_INDEXING_API',
-            name: 'Official Google Indexing API',
-            status: 'WARNING',
-            latencyMs: Date.now() - vStart,
-            message: `Google Indexing API dispatch notice: ${idxErr.message}`,
-            timestamp: new Date().toISOString(),
-          });
-          dispatchSummary.totalVectors++;
-        }
+        dispatchSummary.vectors.push({
+          vector: 'GOOGLE_INDEXING_API',
+          name: 'Official Google Indexing API',
+          status: 'SKIPPED',
+          latencyMs: 0,
+          message:
+            'Skipped: Google Indexing API is strictly restricted to JobPosting and BroadcastEvent structured data.',
+          timestamp: new Date().toISOString(),
+        });
+        dispatchSummary.totalVectors++;
       }
 
       // Record audit history

@@ -38,7 +38,7 @@ import { getAppBaseUrl } from './app-config';
  */
 export async function dispatchFastIndexing(
   targetUrl: string,
-  options?: { appBaseUrl?: string; simulated?: boolean; isOwnedDomain?: boolean }
+  options?: { appBaseUrl?: string; simulated?: boolean; isOwnedDomain?: boolean; relaySlug?: string }
 ): Promise<FastIndexExecutionSummary> {
   const startTime = Date.now();
   const appBaseUrl = options?.appBaseUrl || getAppBaseUrl();
@@ -54,7 +54,7 @@ export async function dispatchFastIndexing(
   }
 
   if (isSimulated) {
-    const relaySlug = Buffer.from(targetUrl).toString('base64url').slice(0, 32);
+    const relaySlug = options?.relaySlug || Buffer.from(targetUrl).toString('base64url');
     return {
       targetUrl,
       overallStatus: 'DISPATCHED',
@@ -115,7 +115,7 @@ export async function dispatchFastIndexing(
   }
 
   // Execute crawl vectors simultaneously in parallel
-  const relaySlug = Buffer.from(targetUrl).toString('base64url').slice(0, 32);
+  const relaySlug = options?.relaySlug || Buffer.from(targetUrl).toString('base64url');
   const relayUrl = `${appBaseUrl}/relay/${relaySlug}`;
   const apiRelayUrl = `${appBaseUrl}/api/relay/${relaySlug}`;
 

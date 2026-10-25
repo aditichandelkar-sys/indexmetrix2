@@ -288,7 +288,7 @@ export async function checkGoogleIndexStatus(
   const normalizedTargetStr = parsedTarget.toString();
   const googleSearchUrl = `https://www.google.com/search?q=site:${encodeURIComponent(normalizedTargetStr)}&hl=en`;
   const fetchFn = options?.customFetch || fetch;
-  const timeoutMs = options?.timeoutMs || 6000;
+  const timeoutMs = options?.timeoutMs || 12000;
 
   try {
     const controller = new AbortController();

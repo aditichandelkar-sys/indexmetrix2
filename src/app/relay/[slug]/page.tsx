@@ -7,19 +7,28 @@ interface RelayProps {
   params: { slug: string };
 }
 
-async function resolveTargetUrl(slug: string): Promise<string | null> {
-  try {
-    // 1. Check if slug matches URL ID
-    const record = await prisma.url.findUnique({
-      where: { id: slug },
-      select: { normalizedUrl: true, originalUrl: true },
-    });
-    if (record) return record.normalizedUrl || record.originalUrl;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-    // 2. Decode from base64url
-    const decoded = Buffer.from(slug, 'base64url').toString('utf-8');
+async function resolveTargetUrl(slug: string): Promise<string | null> {
+  const cleanSlug = slug?.trim();
+  if (!cleanSlug) return null;
+
+  try {
+    if (UUID_REGEX.test(cleanSlug)) {
+      const record = await prisma.url.findUnique({
+        where: { id: cleanSlug },
+        select: { normalizedUrl: true, originalUrl: true },
+      });
+      if (record) return record.normalizedUrl || record.originalUrl;
+      return null;
+    }
+
+    const decoded = Buffer.from(cleanSlug, 'base64url').toString('utf-8');
     if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
-      return decoded;
+      const parsed = new URL(decoded);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return decoded;
+      }
     }
   } catch {
     // ignore decoding errors
