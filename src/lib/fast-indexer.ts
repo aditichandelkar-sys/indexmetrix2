@@ -11,10 +11,19 @@
  * - Relay gateways provide clean crawlable links but do not force indexing.
  */
 
+export type VectorSignalStatus =
+  | 'ACCEPTED'   // Provider confirmed acceptance into crawl/indexing queue
+  | 'ATTEMPTED'  // Dispatched to discovery/proxy endpoint (does not guarantee crawl)
+  | 'REJECTED'   // Provider rejected submission (e.g. 422 unverified domain, 403)
+  | 'SKIPPED'    // Provider skipped (e.g. ineligible schema or missing credentials)
+  | 'FAILED'     // Network or endpoint failure
+  | 'SUCCESS'    // Legacy compatibility alias
+  | 'WARNING';   // Legacy compatibility alias
+
 export interface FastIndexVectorResult {
   vector: string;
   name: string;
-  status: 'SUCCESS' | 'WARNING' | 'FAILED' | 'SKIPPED';
+  status: VectorSignalStatus;
   statusCode?: number;
   latencyMs: number;
   message: string;
@@ -26,6 +35,9 @@ export interface FastIndexExecutionSummary {
   overallStatus: 'DISPATCHED' | 'PARTIAL' | 'FAILED';
   totalVectors: number;
   successfulVectors: number;
+  rejectedVectors?: number;
+  skippedVectors?: number;
+  failedVectors?: number;
   vectors: FastIndexVectorResult[];
   dispatchDurationMs: number;
   scheduledNextCheck: string;
@@ -60,20 +72,23 @@ export async function dispatchFastIndexing(
       overallStatus: 'DISPATCHED',
       totalVectors: 5,
       successfulVectors: isOwned ? 5 : 4,
+      skippedVectors: isOwned ? 0 : 1,
+      rejectedVectors: 0,
+      failedVectors: 0,
       vectors: [
         {
           vector: 'GOOGLE_TRANSLATE_PROXY',
           name: 'Public Translation Fetch Gateway',
-          status: 'SUCCESS',
+          status: 'ATTEMPTED',
           statusCode: 200,
           latencyMs: 12,
-          message: 'Public translation proxy fetch dispatched (Note: does not guarantee search engine indexing)',
+          message: 'Public translation proxy pre-fetch attempted (Note: does not guarantee search engine indexing)',
           timestamp: new Date().toISOString(),
         },
         {
           vector: 'GOOGLE_PUBSUBHUBBUB',
           name: 'Google WebSub Realtime Hub',
-          status: 'SUCCESS',
+          status: 'ACCEPTED',
           statusCode: 204,
           latencyMs: 8,
           message: 'Published realtime notification to Google WebSub hub for feed syndication',
@@ -82,30 +97,30 @@ export async function dispatchFastIndexing(
         {
           vector: 'SITEMAP_PING',
           name: 'Search Engine Sitemap Ping (Google & Bing)',
-          status: 'SUCCESS',
+          status: 'ATTEMPTED',
           statusCode: 200,
           latencyMs: 15,
-          message: 'Sitemap ping notification dispatched to public search engine endpoints',
+          message: 'Sitemap ping notification attempted to public search engine endpoints (Bing/RPC)',
           timestamp: new Date().toISOString(),
         },
         {
           vector: 'INDEXNOW_API',
           name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
-          status: isOwned ? 'SUCCESS' : 'SKIPPED',
+          status: isOwned ? 'ACCEPTED' : 'SKIPPED',
           statusCode: isOwned ? 200 : undefined,
           latencyMs: 10,
           message: isOwned
-            ? 'Instant notification transmitted to IndexNow protocol network'
-            : 'NOT_AUTHORIZED_FOR_INDEXNOW: Target domain key cannot be verified on unowned third-party domain.',
+            ? 'Instant notification accepted by IndexNow protocol network'
+            : 'IndexNow submission skipped for unowned third-party domain (key verification required on target root).',
           timestamp: new Date().toISOString(),
         },
         {
           vector: 'RELAY_GATEWAY',
           name: 'Crawlable Gateway Relay',
-          status: 'SUCCESS',
+          status: 'ACCEPTED',
           statusCode: 200,
           latencyMs: 2,
-          message: `Crawlable gateway bridge available at ${appBaseUrl}/relay/${relaySlug} (provides navigation bridge; does not force bot indexing)`,
+          message: `Crawlable 301 gateway bridge active at ${appBaseUrl}/relay/${relaySlug} (provides navigation bridge; does not force bot indexing)`,
           timestamp: new Date().toISOString(),
         },
       ],
@@ -155,19 +170,19 @@ export async function dispatchFastIndexing(
         return {
           vector: 'GOOGLE_TRANSLATE_PROXY',
           name: 'Public Translation Fetch Gateway',
-          status: 'SUCCESS',
+          status: 'ATTEMPTED',
           statusCode: 200,
           latencyMs: latency,
-          message: 'Public translation proxy and pre-crawl telemetry dispatched to search engine edge caches',
+          message: 'Public translation proxy pre-fetch attempted. (Does not guarantee search engine bot crawl or indexing).',
           timestamp: new Date().toISOString(),
         };
       } catch (err: any) {
         return {
           vector: 'GOOGLE_TRANSLATE_PROXY',
           name: 'Public Translation Fetch Gateway',
-          status: 'WARNING',
+          status: 'FAILED',
           latencyMs: Date.now() - vStart,
-          message: `Translation gateway fetch notice: ${err.message}`,
+          message: `Translation gateway fetch failed: ${err.message}`,
           timestamp: new Date().toISOString(),
         };
       }
@@ -208,17 +223,17 @@ export async function dispatchFastIndexing(
         return {
           vector: 'GOOGLE_PUBSUBHUBBUB',
           name: 'Google WebSub Realtime Hub',
-          status: 'SUCCESS',
+          status: 'ACCEPTED',
           statusCode: 204,
           latencyMs: Date.now() - vStart,
-          message: 'Published realtime notification to Google WebSub & syndication hubs for feed discovery',
+          message: 'Google WebSub realtime hub accepted rapid feed syndication ping (HTTP 204). (Does not guarantee third-party destination crawl).',
           timestamp: new Date().toISOString(),
         };
       } catch (err: any) {
         return {
           vector: 'GOOGLE_PUBSUBHUBBUB',
           name: 'Google WebSub Realtime Hub',
-          status: 'WARNING',
+          status: 'FAILED',
           latencyMs: Date.now() - vStart,
           message: `WebSub hub notice: ${err.message}`,
           timestamp: new Date().toISOString(),
@@ -247,19 +262,19 @@ export async function dispatchFastIndexing(
         return {
           vector: 'SITEMAP_PING',
           name: 'Search Engine Sitemap Ping (Google & Bing)',
-          status: 'SUCCESS',
+          status: 'ATTEMPTED',
           statusCode: 200,
           latencyMs: Date.now() - vStart,
-          message: 'Dynamic sitemap and RPC ping notifications dispatched across search engine networks',
+          message: 'Dynamic sitemap notification ping dispatched to Bing/RPC network. Google sitemap ping endpoint is deprecated by Google.',
           timestamp: new Date().toISOString(),
         };
       } catch (err: any) {
         return {
           vector: 'SITEMAP_PING',
           name: 'Search Engine Sitemap Ping (Google & Bing)',
-          status: 'WARNING',
+          status: 'FAILED',
           latencyMs: Date.now() - vStart,
-          message: 'Sitemap ping notified',
+          message: `Sitemap ping failed: ${err.message}`,
           timestamp: new Date().toISOString(),
         };
       }
@@ -291,22 +306,92 @@ export async function dispatchFastIndexing(
         }).catch(() => null);
         clearTimeout(timeoutId);
 
+        if (!res) {
+          return {
+            vector: 'INDEXNOW_API',
+            name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
+            status: isOwned ? 'FAILED' : 'SKIPPED',
+            latencyMs: Date.now() - vStart,
+            message: 'IndexNow request aborted or not answered.',
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        const statusCode = res.status;
+        if (statusCode === 200 || statusCode === 202) {
+          return {
+            vector: 'INDEXNOW_API',
+            name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
+            status: 'ACCEPTED',
+            statusCode,
+            latencyMs: Date.now() - vStart,
+            message: 'IndexNow search engine protocol confirmed acceptance of URL.',
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (statusCode === 422) {
+          return {
+            vector: 'INDEXNOW_API',
+            name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
+            status: 'REJECTED',
+            statusCode: 422,
+            latencyMs: Date.now() - vStart,
+            message: 'IndexNow rejected submission (HTTP 422 Unprocessable Entity): Key verification required on target root domain.',
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (statusCode === 403) {
+          return {
+            vector: 'INDEXNOW_API',
+            name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
+            status: 'REJECTED',
+            statusCode: 403,
+            latencyMs: Date.now() - vStart,
+            message: 'IndexNow rejected submission (HTTP 403 Forbidden): Invalid key or unauthorized domain.',
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (statusCode === 400) {
+          return {
+            vector: 'INDEXNOW_API',
+            name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
+            status: 'REJECTED',
+            statusCode: 400,
+            latencyMs: Date.now() - vStart,
+            message: 'IndexNow rejected request (HTTP 400 Bad Request).',
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (statusCode >= 500) {
+          return {
+            vector: 'INDEXNOW_API',
+            name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
+            status: 'FAILED',
+            statusCode,
+            latencyMs: Date.now() - vStart,
+            message: `IndexNow service unavailable (HTTP ${statusCode}).`,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
         return {
           vector: 'INDEXNOW_API',
           name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
-          status: 'SUCCESS',
-          statusCode: res ? res.status : 200,
+          status: 'ATTEMPTED',
+          statusCode,
           latencyMs: Date.now() - vStart,
-          message: isOwned
-            ? 'Instant notification transmitted to IndexNow protocol network'
-            : `Crawlable relay bridge transmitted to IndexNow protocol network for ${submitHost}`,
+          message: `IndexNow transmitted with response status ${statusCode}.`,
           timestamp: new Date().toISOString(),
         };
       } catch (err: any) {
         return {
           vector: 'INDEXNOW_API',
           name: 'IndexNow Search Engine Protocol (Bing/Yandex)',
-          status: isOwned ? 'WARNING' : 'SKIPPED',
+          status: isOwned ? 'FAILED' : 'SKIPPED',
           latencyMs: Date.now() - vStart,
           message: `IndexNow dispatch notice: ${err.message}`,
           timestamp: new Date().toISOString(),
@@ -320,10 +405,10 @@ export async function dispatchFastIndexing(
       return {
         vector: 'RELAY_GATEWAY',
         name: 'Crawlable Gateway Relay',
-        status: 'SUCCESS',
+        status: 'ACCEPTED',
         statusCode: 200,
         latencyMs: Date.now() - vStart,
-        message: `Crawlable 301 gateway bridge active at ${apiRelayUrl} and ${relayUrl} (provides direct bot navigation bridge to target)`,
+        message: `Crawlable 301 gateway bridge active at ${apiRelayUrl} and ${relayUrl} (provides direct bot navigation bridge to target; does not guarantee Google indexing)`,
         timestamp: new Date().toISOString(),
       };
     })(),
@@ -332,13 +417,28 @@ export async function dispatchFastIndexing(
   vectors.push(v1, v2, v3, v4, v5);
 
   const totalDuration = Date.now() - startTime;
-  const successCount = vectors.filter((v) => v.status === 'SUCCESS' || v.status === 'WARNING').length;
+  const acceptedCount = vectors.filter((v) => v.status === 'ACCEPTED').length;
+  const attemptedCount = vectors.filter((v) => v.status === 'ATTEMPTED').length;
+  const rejectedCount = vectors.filter((v) => v.status === 'REJECTED').length;
+  const skippedCount = vectors.filter((v) => v.status === 'SKIPPED').length;
+  const failedCount = vectors.filter((v) => v.status === 'FAILED').length;
+  const successCount = acceptedCount + attemptedCount + vectors.filter((v) => v.status === 'SUCCESS').length;
+
+  let overallStatus: 'DISPATCHED' | 'PARTIAL' | 'FAILED' = 'DISPATCHED';
+  if (successCount === 0) {
+    overallStatus = 'FAILED';
+  } else if (rejectedCount > 0 || failedCount > 0 || skippedCount > 0) {
+    overallStatus = 'PARTIAL';
+  }
 
   return {
     targetUrl,
-    overallStatus: successCount >= 3 ? 'DISPATCHED' : 'PARTIAL',
+    overallStatus,
     totalVectors: vectors.length,
     successfulVectors: successCount,
+    rejectedVectors: rejectedCount,
+    skippedVectors: skippedCount,
+    failedVectors: failedCount,
     vectors,
     dispatchDurationMs: totalDuration,
     scheduledNextCheck: new Date(Date.now() + 1000 * 60 * 15).toISOString(),

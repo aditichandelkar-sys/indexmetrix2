@@ -7,6 +7,8 @@ import { dispatchFastIndexing, FastIndexExecutionSummary } from '@/lib/fast-inde
 import { normalizeUrl } from '@/lib/property-matcher';
 import { getMasterServiceAccount } from '@/lib/google-service-account';
 
+import { validateTargetPreflight } from '@/lib/target-preflight';
+
 const fastIndexSchema = z.object({
   urls: z.array(z.string().min(4)).min(1, 'At least one URL is required'),
   projectId: z.string().optional(),
@@ -81,13 +83,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Process each valid URL through Credit Ledger and Fast Indexer
+    // 3. Process each valid URL through Secure Pre-flight Gate, Credit Ledger, and Fast Indexer
     const { getAppBaseUrl } = await import('@/lib/app-config');
     const appBaseUrl = getAppBaseUrl();
     const results: FastIndexExecutionSummary[] = [];
 
     for (const item of validUrls) {
-      // Deduct 1 credit per fast index dispatch
+      // 3a. Secure Pre-Flight Reachability & Health Check BEFORE deducting any credits
+      const preflight = await validateTargetPreflight(item.normalized);
+      if (!preflight.canDispatch) {
+        invalidUrls.push({
+          url: item.original,
+          reason: preflight.errorMessage || 'Target pre-flight verification failed',
+        });
+
+        results.push({
+          targetUrl: item.normalized,
+          overallStatus: 'FAILED',
+          totalVectors: 1,
+          successfulVectors: 0,
+          rejectedVectors: preflight.isDead || preflight.status === 'BLOCKED_SSRF' ? 1 : 0,
+          failedVectors: preflight.isDead || preflight.status === 'BLOCKED_SSRF' ? 0 : 1,
+          vectors: [
+            {
+              vector: 'TARGET_PREFLIGHT',
+              name: 'Target Reachability & Health Gate',
+              status: preflight.isDead || preflight.status === 'BLOCKED_SSRF' ? 'REJECTED' : 'FAILED',
+              statusCode: preflight.httpStatus || undefined,
+              latencyMs: preflight.latencyMs,
+              message: preflight.errorMessage || 'Target URL reachability check failed.',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          dispatchDurationMs: preflight.latencyMs,
+          scheduledNextCheck: new Date().toISOString(),
+        });
+        continue;
+      }
+
+      // 3b. Deduct 1 credit per fast index dispatch (ONLY for pre-flight verified URLs)
       const idempotencyKey = `fast_index_${user.id}_${Buffer.from(item.normalized).toString('base64url')}_${Date.now()}`;
       const creditResult = await deductCredits({
         userId: user.id,
@@ -103,6 +137,7 @@ export async function POST(req: NextRequest) {
           overallStatus: 'FAILED',
           totalVectors: 0,
           successfulVectors: 0,
+          failedVectors: 1,
           vectors: [
             {
               vector: 'CREDIT_ENGINE',
@@ -164,6 +199,7 @@ export async function POST(req: NextRequest) {
           timestamp: new Date().toISOString(),
         });
         dispatchSummary.totalVectors++;
+        dispatchSummary.skippedVectors = (dispatchSummary.skippedVectors || 0) + 1;
       }
 
       // Record audit history
@@ -179,10 +215,30 @@ export async function POST(req: NextRequest) {
       results.push(dispatchSummary);
     }
 
+    const dispatchedCount = results.filter((r) => r.overallStatus !== 'FAILED').length;
+
+    // If all submitted URLs failed (e.g. dead link 404 or SSRF), report clear failure
+    if (dispatchedCount === 0 && results.length > 0) {
+      const firstFailure = results[0];
+      const isDead = firstFailure.vectors.some((v) => v.message.includes('Confirmed dead') || v.statusCode === 404 || v.statusCode === 410);
+      return NextResponse.json(
+        {
+          success: false,
+          error: firstFailure.vectors[0]?.message || 'All target URLs failed reachability pre-flight verification.',
+          totalRequested: rawUrls.length,
+          dispatchedCount: 0,
+          invalidCount: invalidUrls.length,
+          invalidUrls,
+          results,
+        },
+        { status: isDead ? 422 : 400 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
       totalRequested: rawUrls.length,
-      dispatchedCount: results.filter((r) => r.overallStatus !== 'FAILED').length,
+      dispatchedCount,
       invalidCount: invalidUrls.length,
       invalidUrls,
       results,

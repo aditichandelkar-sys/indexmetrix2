@@ -179,6 +179,22 @@ export async function POST(req: NextRequest) {
       const reqMode = (body as any)?.mode;
 
       if (reqProvider === 'MULTI_VECTOR_ENGINE' || reqMode === 'multi-vector') {
+        const { validateTargetPreflight } = await import('@/lib/target-preflight');
+        const preflight = await validateTargetPreflight(normalizedUrl);
+        if (!preflight.canDispatch) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: preflight.status,
+                message: preflight.errorMessage || 'Target URL reachability pre-flight verification failed.',
+                preflight,
+              },
+            },
+            { status: preflight.isDead ? 422 : 400 }
+          );
+        }
+
         const batchId = `mve_${Date.now()}_${Buffer.from(normalizedUrl).toString('base64url').slice(0, 12)}`;
         const { dispatchFastIndexing } = await import('@/lib/fast-indexer');
         dispatchFastIndexing(normalizedUrl).catch(() => null);

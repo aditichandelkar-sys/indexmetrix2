@@ -24,6 +24,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     testTimeout: 35000,
+    fileParallelism: false,
   },
   resolve: {
     alias: {

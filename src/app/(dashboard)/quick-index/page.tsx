@@ -16,12 +16,14 @@ import {
   Copy,
   Check,
   Search,
+  XCircle,
+  MinusCircle,
 } from 'lucide-react';
 
 interface VectorResult {
   vector: string;
   name: string;
-  status: 'SUCCESS' | 'WARNING' | 'FAILED' | 'SKIPPED';
+  status: 'ACCEPTED' | 'ATTEMPTED' | 'REJECTED' | 'SKIPPED' | 'FAILED' | 'SUCCESS' | 'WARNING';
   statusCode?: number;
   latencyMs: number;
   message: string;
@@ -401,16 +403,36 @@ export default function QuickIndexPage() {
                         className="p-3 bg-white/[0.02] border border-white/5 rounded-xl flex items-start gap-3 text-xs"
                       >
                         <div className="mt-0.5 shrink-0">
-                          {vec.status === 'SUCCESS' ? (
+                          {vec.status === 'ACCEPTED' || vec.status === 'SUCCESS' ? (
                             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          ) : vec.status === 'ATTEMPTED' ? (
+                            <Radio className="w-4 h-4 text-cyan-400" />
+                          ) : vec.status === 'REJECTED' ? (
+                            <XCircle className="w-4 h-4 text-rose-400" />
+                          ) : vec.status === 'SKIPPED' ? (
+                            <MinusCircle className="w-4 h-4 text-slate-400" />
                           ) : (
                             <AlertTriangle className="w-4 h-4 text-amber-400" />
                           )}
                         </div>
-                        <div className="space-y-0.5 min-w-0">
+                        <div className="space-y-0.5 min-w-0 flex-1">
                           <div className="font-semibold text-slate-200 flex items-center justify-between gap-2">
-                            <span>{vec.name}</span>
-                            <span className="text-[10px] text-slate-500 font-mono">{vec.latencyMs}ms</span>
+                            <span className="flex items-center gap-1.5 flex-wrap">
+                              <span>{vec.name}</span>
+                              {vec.status === 'ACCEPTED' && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">ACCEPTED</span>
+                              )}
+                              {vec.status === 'ATTEMPTED' && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">ATTEMPTED</span>
+                              )}
+                              {vec.status === 'REJECTED' && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">REJECTED</span>
+                              )}
+                              {vec.status === 'SKIPPED' && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-500/20 text-slate-300 border border-slate-500/30">SKIPPED</span>
+                              )}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono shrink-0">{vec.latencyMs}ms</span>
                           </div>
                           <p className="text-slate-400 text-[11px] leading-tight line-clamp-2">
                             {vec.message}

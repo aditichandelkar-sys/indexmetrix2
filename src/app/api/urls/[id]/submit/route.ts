@@ -43,6 +43,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // If fast index requested OR url has no matched Search Console property (3rd party link)
     if (forceFastIndex || !urlRecord.matchedProperty || !urlRecord.matchedProperty.googleAccount) {
+      // Secure pre-flight reachability check BEFORE credit deduction or provider dispatch
+      const { validateTargetPreflight } = await import('@/lib/target-preflight');
+      const preflight = await validateTargetPreflight(urlRecord.normalizedUrl);
+      if (!preflight.canDispatch) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: preflight.status,
+              message: preflight.errorMessage || 'Target URL reachability pre-flight verification failed.',
+              preflight,
+            },
+          },
+          { status: preflight.isDead ? 422 : 400 }
+        );
+      }
+
       const idempotencyKey = `fast_submit_${urlRecord.id}_${Date.now()}`;
       const creditResult = await deductCredits({
         userId: user.id,
