@@ -374,37 +374,60 @@ export async function createBatchIndexingJob(params: CreateBatchJobParams): Prom
     }
   }
 
-  // Create IndexingJob and IndexingJobItems in transaction
-  const batchJob = await prisma.$transaction(async (tx) => {
-    const job = await tx.indexingJob.create({
-      data: {
-        userId: user.id,
-        projectId: project.id,
-        type,
+  // Create IndexingJob and IndexingJobItems in transaction with retry resilience
+  async function runWithTransactionRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        attempt++;
+        const isLockError =
+          err?.message?.includes('SQLITE_BUSY') ||
+          err?.message?.includes('database is locked') ||
+          err?.code === 'P2034' ||
+          err?.message?.includes('deadlock');
+        if (isLockError && attempt < retries) {
+          await new Promise((r) => setTimeout(r, 50 * Math.pow(2, attempt)));
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  const batchJob = await runWithTransactionRetry(async () => {
+    return await prisma.$transaction(async (tx) => {
+      const job = await tx.indexingJob.create({
+        data: {
+          userId: user.id,
+          projectId: project.id,
+          type,
+          status: 'QUEUED',
+          totalUrls: urls.length,
+          queuedUrls: urls.length,
+          processingUrls: 0,
+          completedUrls: 0,
+          failedUrls: 0,
+          idempotencyKey: idempotencyKey || null,
+          metadata: metadata ? JSON.stringify(metadata) : null,
+        },
+      });
+
+      const itemsData = urls.map((u) => ({
+        jobId: job.id,
+        urlId: u.id,
         status: 'QUEUED',
-        totalUrls: urls.length,
-        queuedUrls: urls.length,
-        processingUrls: 0,
-        completedUrls: 0,
-        failedUrls: 0,
-        idempotencyKey: idempotencyKey || null,
-        metadata: metadata ? JSON.stringify(metadata) : null,
-      },
+        attempts: 0,
+        maxAttempts: 3,
+      }));
+
+      await tx.indexingJobItem.createMany({
+        data: itemsData,
+      });
+
+      return job;
     });
-
-    const itemsData = urls.map((u) => ({
-      jobId: job.id,
-      urlId: u.id,
-      status: 'QUEUED',
-      attempts: 0,
-      maxAttempts: 3,
-    }));
-
-    await tx.indexingJobItem.createMany({
-      data: itemsData,
-    });
-
-    return job;
   });
 
   // Enqueue for processing: Use Redis/BullMQ when available while preserving in-process fallback
@@ -580,14 +603,18 @@ export async function processBatchIndexingJob(batchJobId: string): Promise<void>
         const { checkGoogleIndexStatus } = await import('./serp-checker');
         const serpCheck = await checkGoogleIndexStatus(item.url.normalizedUrl);
 
-        const newStatus = serpCheck.isIndexed ? 'INDEXED' : 'PROCESSING';
+        const newStatus = serpCheck.isIndexed
+          ? 'INDEXED'
+          : fastResult.successfulVectors > 0
+          ? 'SUBMITTED'
+          : 'PROCESSING';
 
         await prisma.url.update({
           where: { id: item.urlId },
           data: {
             status: newStatus as any,
             providerStatus: serpCheck.isIndexed ? 'indexed' : 'dispatched',
-            discoveryStatus: serpCheck.verificationState,
+            discoveryStatus: serpCheck.isIndexed ? 'INDEXED_CONFIRMED' : serpCheck.verificationState || 'PROVIDER_ACCEPTED',
             lastCheckedAt: new Date(),
             ...(serpCheck.isIndexed ? { lastIndexedAt: new Date() } : {}),
           },

@@ -32,6 +32,10 @@ interface IndexingJobItem {
     status: string;
     lastGoogleVerdict?: string;
     lastCoverageState?: string;
+    discoveryStatus?: string;
+    provider?: string;
+    providerStatus?: string;
+    providerError?: string;
   };
 }
 
@@ -423,11 +427,26 @@ export default function JobsQueuePage() {
                                         </div>
 
                                         <div className="flex items-center gap-3 flex-shrink-0 text-[11px]">
-                                          {item.url?.lastGoogleVerdict && (
-                                            <span className="font-mono text-cyan-300 font-semibold">
-                                              Verdict: {item.url.lastGoogleVerdict}
-                                            </span>
-                                          )}
+                                          <span
+                                            className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                                              item.url?.status === 'INDEXED'
+                                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                                : item.url?.status === 'NOT_INDEXED'
+                                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                                : item.url?.status === 'BLOCKED'
+                                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                                : item.url?.status === 'REJECTED'
+                                                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                                : item.url?.discoveryStatus === 'PROVIDER_ACCEPTED' || item.url?.status === 'PROVIDER_ACCEPTED'
+                                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                                : item.url?.status === 'UNABLE_TO_VERIFY'
+                                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                                : 'bg-slate-500/20 text-slate-300 border border-slate-500/30'
+                                            }`}
+                                            title="Independent Google Indexing Status"
+                                          >
+                                            Google: {item.url?.lastGoogleVerdict ? `Verdict ${item.url.lastGoogleVerdict}` : item.url?.discoveryStatus === 'PROVIDER_ACCEPTED' ? 'PROVIDER_ACCEPTED' : item.url?.status || 'SUBMITTED'}
+                                          </span>
                                           {item.lastError && (
                                             <span className="text-rose-400 truncate max-w-xs" title={item.lastError}>
                                               Error: {item.lastError}

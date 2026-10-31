@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    serverComponentsExternalPackages: ['bullmq', 'ioredis'],
+  },
   async rewrites() {
     return [
       // Rewrite /dashboard/* routes to canonical root paths

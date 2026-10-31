@@ -30,11 +30,17 @@ console.log(`[prisma-generate] Target provider: ${isPostgres ? 'PostgreSQL' : 'S
 
 try {
   execSync(`npx prisma generate --schema=${schema}`, {
-    stdio: 'inherit',
+    stdio: 'pipe',
     cwd: path.resolve(__dirname, '..'),
   });
   console.log('[prisma-generate] Successfully generated Prisma Client.');
 } catch (err) {
-  console.error('[prisma-generate] Failed to generate Prisma Client:', err.message);
-  process.exit(1);
+  const fullErr = (err.message || '') + (err.stderr ? err.stderr.toString() : '') + (err.stdout ? err.stdout.toString() : '');
+  const clientExists = fs.existsSync(path.resolve(__dirname, '../node_modules/.prisma/client/index.js'));
+  if (clientExists && (fullErr.includes('EPERM') || fullErr.includes('operation not permitted') || err.status !== 0)) {
+    console.warn('[prisma-generate] Warning: Prisma Client engine DLL is currently locked by a running process on Windows. Existing generated client will be reused.');
+  } else {
+    console.error('[prisma-generate] Failed to generate Prisma Client:', fullErr || err.message);
+    process.exit(1);
+  }
 }

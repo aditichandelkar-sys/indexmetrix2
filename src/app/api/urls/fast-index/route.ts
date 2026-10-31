@@ -6,12 +6,12 @@ import { deductCredits } from '@/lib/credit-ledger';
 import { dispatchFastIndexing, FastIndexExecutionSummary } from '@/lib/fast-indexer';
 import { normalizeUrl } from '@/lib/property-matcher';
 import { getMasterServiceAccount } from '@/lib/google-service-account';
-
 import { validateTargetPreflight } from '@/lib/target-preflight';
 
 const fastIndexSchema = z.object({
   urls: z.array(z.string().min(4)).min(1, 'At least one URL is required'),
   projectId: z.string().optional(),
+  idempotencyKey: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -25,7 +25,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: parsed.error.errors[0].message }, { status: 400 });
     }
 
-    const { urls: rawUrls, projectId: reqProjectId } = parsed.data;
+    const { urls: rawUrls, projectId: reqProjectId, idempotencyKey: bodyIdempotencyKey } = parsed.data;
+    const batchIdempotencyKey = bodyIdempotencyKey || req.headers.get('idempotency-key') || null;
+
+    // Idempotency: Return existing completed job if idempotency key was previously processed
+    if (batchIdempotencyKey) {
+      const existingJob = await prisma.indexingJob.findUnique({
+        where: { idempotencyKey: batchIdempotencyKey },
+        include: {
+          items: {
+            include: {
+              url: { select: { id: true, normalizedUrl: true, status: true } },
+            },
+          },
+        },
+      });
+
+      if (existingJob) {
+        return NextResponse.json({
+          success: true,
+          totalRequested: existingJob.totalUrls,
+          dispatchedCount: existingJob.completedUrls,
+          invalidCount: 0,
+          invalidUrls: [],
+          job: existingJob,
+          idempotent: true,
+        });
+      }
+    }
 
     // 1. Resolve or auto-create a default project for 3rd-party URLs
     let projectId = reqProjectId;
@@ -87,6 +114,9 @@ export async function POST(req: NextRequest) {
     const { getAppBaseUrl } = await import('@/lib/app-config');
     const appBaseUrl = getAppBaseUrl();
     const results: FastIndexExecutionSummary[] = [];
+    const processedSuccessItems: Array<{ urlRecord: any; dispatchSummary: FastIndexExecutionSummary; creditsCharged: number }> = [];
+
+    const startTime = Date.now();
 
     for (const item of validUrls) {
       // 3a. Secure Pre-Flight Reachability & Health Check BEFORE deducting any credits
@@ -122,12 +152,15 @@ export async function POST(req: NextRequest) {
       }
 
       // 3b. Deduct 1 credit per fast index dispatch (ONLY for pre-flight verified URLs)
-      const idempotencyKey = `fast_index_${user.id}_${Buffer.from(item.normalized).toString('base64url')}_${Date.now()}`;
+      const itemKey = batchIdempotencyKey
+        ? `fast_index_${batchIdempotencyKey}_${Buffer.from(item.normalized).toString('base64url').slice(0, 16)}`
+        : `fast_index_${user.id}_${Buffer.from(item.normalized).toString('base64url')}`;
+
       const creditResult = await deductCredits({
         userId: user.id,
         amount: 1,
         operation: 'FAST_INDEX_DISPATCH',
-        idempotencyKey,
+        idempotencyKey: itemKey,
         reason: `Fast Googlebot Crawl Dispatch: ${item.normalized}`,
       });
 
@@ -184,9 +217,6 @@ export async function POST(req: NextRequest) {
       });
 
       // Google Indexing API Capability & Eligibility Gate
-      // Official Google guidelines restrict direct Indexing API notifications strictly to
-      // JobPosting and BroadcastEvent structured data. Standard web pages, forum threads,
-      // and uploaded PDF documents are not eligible for direct Indexing API submission.
       const masterCreds = await getMasterServiceAccount();
       if (masterCreds) {
         dispatchSummary.vectors.push({
@@ -213,9 +243,66 @@ export async function POST(req: NextRequest) {
       });
 
       results.push(dispatchSummary);
+      processedSuccessItems.push({
+        urlRecord,
+        dispatchSummary,
+        creditsCharged: creditResult.amountDeducted,
+      });
     }
 
     const dispatchedCount = results.filter((r) => r.overallStatus !== 'FAILED').length;
+
+    // 4. Job Persistence: Ensure latest submissions ALWAYS appear in Indexing Jobs
+    let jobRecord: any = null;
+    if (processedSuccessItems.length > 0) {
+      try {
+        const totalCharged = processedSuccessItems.reduce((acc, p) => acc + p.creditsCharged, 0);
+        jobRecord = await prisma.$transaction(async (tx) => {
+          const job = await tx.indexingJob.create({
+            data: {
+              userId: user.id,
+              projectId,
+              type: 'DISCOVERY_AND_INSPECTION',
+              status: dispatchedCount === rawUrls.length ? 'COMPLETED' : dispatchedCount > 0 ? 'PARTIAL' : 'FAILED',
+              totalUrls: processedSuccessItems.length,
+              queuedUrls: 0,
+              processingUrls: 0,
+              completedUrls: dispatchedCount,
+              failedUrls: processedSuccessItems.length - dispatchedCount,
+              creditsCharged: totalCharged,
+              creditsRefunded: 0,
+              idempotencyKey: batchIdempotencyKey || null,
+              startedAt: new Date(startTime),
+              completedAt: new Date(),
+              metadata: JSON.stringify({
+                provider: 'MULTI_VECTOR_ENGINE',
+                dispatchedCount,
+                source: 'FAST_INDEX_API',
+              }),
+            },
+          });
+
+          for (const item of processedSuccessItems) {
+            await tx.indexingJobItem.create({
+              data: {
+                jobId: job.id,
+                urlId: item.urlRecord.id,
+                status: item.dispatchSummary.overallStatus === 'FAILED' ? 'FAILED' : 'COMPLETED',
+                attempts: 1,
+                maxAttempts: 3,
+                startedAt: new Date(startTime),
+                completedAt: new Date(),
+                operationResult: JSON.stringify(item.dispatchSummary),
+              },
+            });
+          }
+
+          return job;
+        });
+      } catch (jobErr) {
+        console.error('[Fast-Index] Note on job persistence transaction:', jobErr);
+      }
+    }
 
     // If all submitted URLs failed (e.g. dead link 404 or SSRF), report clear failure
     if (dispatchedCount === 0 && results.length > 0) {
@@ -242,6 +329,7 @@ export async function POST(req: NextRequest) {
       invalidCount: invalidUrls.length,
       invalidUrls,
       results,
+      job: jobRecord,
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

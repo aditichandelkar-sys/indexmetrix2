@@ -60,7 +60,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         );
       }
 
-      const idempotencyKey = `fast_submit_${urlRecord.id}_${Date.now()}`;
+      const idempotencyKey =
+        body?.idempotencyKey ||
+        req.headers.get('idempotency-key') ||
+        `fast_submit_${user.id}_${urlRecord.id}`;
       const creditResult = await deductCredits({
         userId: user.id,
         amount: 1,
@@ -105,6 +108,47 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         },
       });
 
+      // Persist indexing job and item so URL appears in Indexing Jobs Center
+      let jobRecord: any = null;
+      try {
+        jobRecord = await prisma.indexingJob.create({
+          data: {
+            userId: user.id,
+            projectId: urlRecord.projectId,
+            type: 'DISCOVERY_AND_INSPECTION',
+            status: dispatchSummary.overallStatus === 'FAILED' ? 'FAILED' : 'COMPLETED',
+            totalUrls: 1,
+            queuedUrls: 0,
+            processingUrls: 0,
+            completedUrls: dispatchSummary.overallStatus === 'FAILED' ? 0 : 1,
+            failedUrls: dispatchSummary.overallStatus === 'FAILED' ? 1 : 0,
+            creditsCharged: creditResult.amountDeducted,
+            creditsRefunded: 0,
+            startedAt: new Date(),
+            completedAt: new Date(),
+            metadata: JSON.stringify({
+              source: 'URL_SUBMIT_SINGLE',
+              dispatchSummary,
+            }),
+          },
+        });
+
+        await prisma.indexingJobItem.create({
+          data: {
+            jobId: jobRecord.id,
+            urlId: urlRecord.id,
+            status: dispatchSummary.overallStatus === 'FAILED' ? 'FAILED' : 'COMPLETED',
+            attempts: 1,
+            maxAttempts: 3,
+            startedAt: new Date(),
+            completedAt: new Date(),
+            operationResult: JSON.stringify(dispatchSummary),
+          },
+        });
+      } catch (jobErr) {
+        console.error('[Url Submit Single] Note on job persistence:', jobErr);
+      }
+
       return NextResponse.json({
         success: true,
         mode: 'FAST_INDEX',
@@ -112,6 +156,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         message: '3rd-Party URL successfully pushed to Googlebot & Search Engine crawl vectors!',
         dispatchSummary,
         creditsDeducted: creditResult.amountDeducted,
+        job: jobRecord,
       });
     }
 
@@ -136,7 +181,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     // 3. User is submitting an officially eligible JobPosting / BroadcastEvent URL!
-    const idempotencyKey = `submit_${urlRecord.id}_${Date.now()}`;
+    const idempotencyKey =
+      body?.idempotencyKey ||
+      req.headers.get('idempotency-key') ||
+      `submit_indexing_api_${user.id}_${urlRecord.id}`;
     const creditResult = await deductCredits({
       userId: user.id,
       amount: CREDIT_COSTS.SUPPORTED_INDEXING,

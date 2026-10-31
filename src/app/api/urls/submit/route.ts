@@ -221,12 +221,13 @@ export async function POST(req: NextRequest) {
           },
         });
 
+        const reqIdempotencyKey = (body as any)?.idempotencyKey || req.headers.get('idempotency-key');
         const jobResult = await createBatchIndexingJob({
           userId: user.id,
           projectId: project.id,
           urlIds: [urlRecord.id],
           type: 'DISCOVERY_AND_INSPECTION',
-          idempotencyKey: `submit_${urlRecord.id}_${Date.now()}`,
+          idempotencyKey: reqIdempotencyKey || `submit_mve_${user.id}_${urlRecord.id}`,
           metadata: {
             provider: 'MULTI_VECTOR_ENGINE',
             batchId,
@@ -300,12 +301,13 @@ export async function POST(req: NextRequest) {
       });
 
       // Enqueue status monitoring in existing BullMQ queue / worker
+      const reqIdempotencyKey = (body as any)?.idempotencyKey || req.headers.get('idempotency-key');
       const jobResult = await createBatchIndexingJob({
         userId: user.id,
         projectId: project.id,
         urlIds: [urlRecord.id],
         type: 'DISCOVERY_AND_INSPECTION',
-        idempotencyKey: `submit_${urlRecord.id}_${Date.now()}`,
+        idempotencyKey: reqIdempotencyKey || `submit_ii_${user.id}_${urlRecord.id}`,
         metadata: {
           provider: 'INDEXINSTANTLY',
           batchId,
@@ -337,13 +339,14 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 6b. OWNED / GSC FLOW (Completely unchanged):
+    // 6b. OWNED / GSC FLOW:
+    const ownedIdempotencyKey = (body as any)?.idempotencyKey || req.headers.get('idempotency-key');
     const jobResult = await createBatchIndexingJob({
       userId: user.id,
       projectId: project.id,
       urlIds: [urlRecord.id],
       type: 'DISCOVERY_AND_INSPECTION',
-      idempotencyKey: `submit_${urlRecord.id}_${Date.now()}`,
+      idempotencyKey: ownedIdempotencyKey || `submit_gsc_${user.id}_${urlRecord.id}`,
     });
 
     if (!jobResult.success) {
